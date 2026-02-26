@@ -5,60 +5,65 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
+import scipy.linalg as sp
 from scipy.sparse import csc_matrix, bmat
 import scipy.sparse.linalg as linalg
 
 
 from .._utils import LinearRectElement, QuadraticRectElement
-from .._utils import generate_rect_mesh, generate_rectangular_domain
-from .._utils import _progress_range, tqdm
-
+from .._utils import generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity
+from .._utils import _progress_range, tqdm, NonConstantJacobian
+from .._utils._mesh import EdgesDict
 
 
 class IncompNavierStokesSolver2D():
-
-    def __init__(self, nodes: np.ndarray, connectivity: np.ndarray):
+    
+    __setup_physics = False
+    
+    def __init__(self, nodes: np.ndarray, connectivity: np.ndarray, boundary_edges:EdgesDict):
         
         # Nodes and connectivity
         self.__nodes = nodes
-        self.__connectivity = connectivity
-
-        self.__n = len(self.__connectivity[0])
-        
-        if self.__n == 3:
-            raise NotImplementedError("Triangular Elements are not yet supported for {}".format(self.__class__.__name__))
-        elif self.__n == 4:
-            raise NotImplementedError("MINI Elements are not yet supported for {}".format(self.__class__.__name__))
-        elif self.__n == 9:
-            self.velocity_element = QuadraticRectElement()
-            self.pressure_element = LinearRectElement()
-            self.__pressure_connectivity = [con[:4] for con in self.__connectivity]
-        else:
-            raise ValueError(f"No compatible element for a {self.__n} point element.")
+        self.__velocity_connectivity = connectivity
 
         # Number of nodes and elements
-        self.__N = len(self.__nodes)
-        self.__Ne = len(self.__connectivity)
-
+        self.__Nv = len(self.__nodes)
+        self.__Nele = len(self.__velocity_connectivity)
         
-        # Preprocessing
-        self.__preprocessing()
-
-    def __preprocessing(self,):
-
-        # Compute Jacobian
-        self.__detJ = np.zeros((self.__Ne,))
-        self.__InvJ = [0]*self.__Ne
-        for e,con in enumerate(self.__connectivity):
-            self.__detJ[e], self.__InvJ[e] = self.velocity_element.compute_ele_properties(self.__nodes[con])
+        # Number of nodes per element
+        self.__nv = len(self.__velocity_connectivity[0])
+        if self.__nv == 3:
+            raise NotImplementedError("Triangular Elements are not yet supported for {}".format(self.__class__.__name__))
+        elif self.__nv == 4:
+            raise NotImplementedError("MINI Elements are not yet supported for {}".format(self.__class__.__name__))
+        elif self.__nv == 9:
+            self.velocity_element = QuadraticRectElement()
+            self.pressure_element = LinearRectElement()
             
+            self.__np = 4
+            self.__build_pressure_mesh()
+        else:
+            raise ValueError(f"No compatible element for a {self.__nv} point element.")
+        
+        self.__edges: EdgesDict = boundary_edges
 
-        # Evaluate 'Mass' and 'Stiffness' matrix. These DO NOT change with time or value of C
-        self.M = self.__assemble_M()
-        self.K = self.__assemble_K()
+    def setup_physics(self, rho, viscosity):
+        self.rho = rho
+        self.mu = viscosity
+        
+        self.__setup_physics = True
+
+
+    def solve_steadystate(self, u0, nonlinear_solver_options:dict = {}):
+        if not self.__setup_physics:
+            raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
+
+        self.__ss_preprocessing()
+        
+        pass
 
     
-    def solve(self, u0, T:float, dt:float, time_integrator:str|int = 'explicit', nonlinear_solver_options:dict = {}, 
+    def solve_transient(self, u0, T:float, dt:float, time_integrator:str|int = 'explicit', nonlinear_solver_options:dict = {}, 
               terminate_solver = True):
         
         self.__T = T
@@ -86,16 +91,16 @@ class IncompNavierStokesSolver2D():
 
 
         # CONSTRUCT SOLUTION VECTOR U = [C , W]
-        self.__u = np.zeros((self.__nt, 2*self.__N), dtype=float)
+        self.__u = np.zeros((self.__nt, 2*self.__Nv), dtype=float)
         if callable(u0):
-            self.__u[0][:self.__N] = u0(self.__nodes[:,0], self.__nodes[:,1])
-        elif len(u0) == self.__N:
-            self.__u[0][:self.__N] = u0
+            self.__u[0][:self.__Nv] = u0(self.__nodes[:,0], self.__nodes[:,1])
+        elif len(u0) == self.__Nv:
+            self.__u[0][:self.__Nv] = u0
 
         # Computation of W[0] via the variational problem
-        N0 = self.__assemble_N(self.__u[0,:self.__N])
-        b = self.epsilon*(self.K@self.__u[0,:self.__N]) + 1/self.epsilon * N0
-        self.__u[0,self.__N:] = linalg.spsolve(self.M, b)
+        N0 = self.__assemble_N(self.__u[0,:self.__Nv])
+        b = self.epsilon*(self.K@self.__u[0,:self.__Nv]) + 1/self.epsilon * N0
+        self.__u[0,self.__Nv:] = linalg.spsolve(self.M, b)
         
         # CONSERVED QUANTITIES
         self.__mass = np.zeros((self.__nt,), dtype=float)
@@ -115,31 +120,42 @@ class IncompNavierStokesSolver2D():
 
     ####################################################################
     # ASSEMBLE GLOBAL LINEAR SYSTEMS
-    def __assemble_M(self)->csc_matrix:
-        """Assemble Mass Matrix"""
-        M = np.zeros((self.__N, self.__N), dtype= float)
-        # Loop over elements
-        for e,con in enumerate(self.__connectivity):
-            self.velocity_element.Me(M, con, self.__detJ[e])
-        return csc_matrix(M)
     
-    def __assemble_K(self)->csc_matrix:
-        """Assemble Stiffness Matrix"""
-        K = np.zeros((self.__N, self.__N), dtype= float)
-        for e,con in enumerate(self.__connectivity):
-            self.velocity_element.Ke(K, con, self.__detJ[e], self.__InvJ[e])
-        return csc_matrix(K)    
+    def _assemble_S_mat(self,):
+        S11 = np.zeros((self.__Nv, self.__Nv))
+        S22 = np.zeros((self.__Nv, self.__Nv))
+        S12 = np.zeros((self.__Nv, self.__Nv))
+        for e, con in enumerate(self.__velocity_connectivity):
+            self.velocity_element.Se(self.__nodes, con, S11, S22, S12)
+        return (_*self.mu for _ in [S11, S22, S12])
     
-    def __assemble_N(self, evaluation_C):
-        """Assemble non-linear mass matrix"""
-        N = np.zeros((self.__N,), dtype=float)
-        for e,con in enumerate(self.__connectivity):
-            # Classic overlapping block assembly
-            self.velocity_element.Ne(N, con, self.__detJ[e], evaluation_C[con])
-        return N
+    def __assemble_R_mat(self,):
+        R10 = np.zeros((self.__Nv, self.__Np))
+        R20 = np.zeros((self.__Nv, self.__Np))
+        for con_v, con_p in zip(self.__velocity_connectivity, self.__pressure_connectivity):
+            for (xi,eta), wi in zip(*self.velocity_element.quadrature_points(9)):
+                # VELOCITY FINITE ELEMENT
+                grad_psi_hat = self.velocity_element.grad_basis_functions(xi,eta)
+                jac = self.velocity_element.jacobian(self.__nodes[con_v], xi, eta)
+                detJ = jac[0,0]*jac[1,1] - jac[1,0]*jac[0,1]
+                invJ = np.array([[jac[1,1], -jac[1,0]],
+                                [-jac[0,1], jac[0,0]]])*(1/detJ)
+                grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+
+                # PRESSURE FINITE ELEMENT
+                phi = self.pressure_element.basis_functions(xi, eta)
+
+                R10[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,0], phi)*detJ*wi
+                R20[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,1], phi)*detJ*wi
+        return R10, R20
+
+    def evaluate_C(self, evaluation_u):
+        C = np.zeros((self.__Nv, self.__Nv))
+        for con in self.__velocity_connectivity:
+            self.velocity_element._C(self.__nodes, con, C, evaluation_u[:self.__Nv], evaluation_u[self.__Nv:2*self.__Nv])
+        return C
     
-    
-    
+
     #####################################################################
     # CONSTRUCTORS
     @classmethod
@@ -151,20 +167,22 @@ class IncompNavierStokesSolver2D():
         return cls(nodes=nodes, connectivity=connectivity)
     
     @classmethod
-    def rectangular_domain_rect(cls, height, width, nx, ny, order):
+    def rectangular_domain_rect(cls, height, width, nx, ny, order, element = 'complete'):
         """
         Generate a 2D rectangular mesh of a rectangle height x width.
         """
         nodes, connectivity = generate_rect_mesh(nx, ny, width, height, order=order)
-        return cls(nodes=nodes, connectivity=connectivity)
+        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
     @classmethod
-    def duct_domain_rect(cls, h1, h2, width, nx, ny, order):
+    def duct_domain_rect(cls, h1, h2, width, nx, ny, order,element = 'complete'):
         """
         Generate a 2D duct mesh of a rectangle height x width.
         """
-        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order)
-        return cls(nodes=nodes, connectivity=connectivity)
+        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order,element=element)
+        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
     #####################################################################
     # AUXILIARY FUNCTIONS
@@ -175,22 +193,18 @@ class IncompNavierStokesSolver2D():
         if plot_nodes:
             ax.plot(self.__nodes[:,0], self.__nodes[:,1], '.', color = node_color, ms = node_size)
             idx = []
-            for con in self.__pressure_connectivity:
-                idx.extend(con)
+            for con in self.__velocity_connectivity:
+                idx.extend(con[:4])
             ax.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.5)
         
-        if self.__tri:
-            ax.triplot(self.__tri, linewidth = linewidth, color = color)
+        if self.velocity_element.n == 9:
+            for e, con in enumerate(self.__velocity_connectivity):
+                temp = np.vstack([self.__nodes[con[:4]],self.__nodes[con[0]]]).T
+                ax.plot(*temp, '-', color = color, linewidth= linewidth)
         else:
-            if self.velocity_element.n == 9:
-                for e, con in enumerate(self.__connectivity):
-                    temp = np.vstack([self.__nodes[con[:4]],self.__nodes[con[0]]]).T
-                    ax.plot(*temp, '-', color = color, linewidth= linewidth)
-            else:
-                for e, con in enumerate(self.__connectivity):
-                    temp = np.vstack([self.__nodes[con],self.__nodes[con[0]]]).T
-                    ax.plot(*temp, '-', color = color, linewidth= linewidth)
-
+            for e, con in enumerate(self.__velocity_connectivity):
+                temp = np.vstack([self.__nodes[con],self.__nodes[con[0]]]).T
+                ax.plot(*temp, '-', color = color, linewidth= linewidth)
 
     def plot_solution(self, z, ax = None, cmap = 'jet', levels = 100, plot_mesh = False, **kwargs):
         if ax is None:
@@ -200,7 +214,7 @@ class IncompNavierStokesSolver2D():
         vmax = kwargs.get('vmax', max(np.nanmax(z), 1.0))
 
         levels = np.linspace(vmin, vmax, levels)
-        if self.__n == 3:
+        if self.__nv == 3:
             tcf = ax.tricontourf(self.__tri, z, levels, cmap = cmap)
         else:
             tcf = ax.tricontourf(self.__nodes[:,0], self.__nodes[:,1], z, levels, cmap = cmap)
@@ -268,8 +282,7 @@ class IncompNavierStokesSolver2D():
         pbar.close()
         tqdm.write(f"File saved successfully: {filepath}\n")
         plt.close(fig)
-        
-    
+            
     def save(self, prepend = None, directory = None, append_time = False):
         if prepend is None:
             filename = self.simulation_name
@@ -300,7 +313,7 @@ class IncompNavierStokesSolver2D():
             # Save arrays
             # -----------------
             arr_grp = sol_grp.create_group("arrays")
-            for name, array in zip(['sol_c', 'sol_w', 't', 'mass', 'energy', 'nodes', 'connectivity'], [self.sol_c, self.sol_w, self.t, self.__mass, self.__energy, self.__nodes, self.__connectivity]):
+            for name, array in zip(['sol_c', 'sol_w', 't', 'mass', 'energy', 'nodes', 'connectivity'], [self.sol_c, self.sol_w, self.t, self.__mass, self.__energy, self.__nodes, self.__velocity_connectivity]):
                 arr_grp.create_dataset(
                     name,
                     data=array,
@@ -314,7 +327,7 @@ class IncompNavierStokesSolver2D():
             # Save scalars
             # -----------------
             scal_grp = sol_grp.create_group("scalars")
-            for name, value in zip(['Ne', 'N', 'dt', 'T'], [self.__Ne, self.__N, self.__dt, self.__T]):
+            for name, value in zip(['Ne', 'N', 'dt', 'T'], [self.__Nele, self.__Nv, self.__dt, self.__T]):
                 scal_grp.create_dataset(name, data=value)
 
             # -----------------
@@ -326,6 +339,46 @@ class IncompNavierStokesSolver2D():
 
     #####################################################################
     # HELPER FUNCTIONS
+
+    def __build_pressure_mesh(self):
+        corners = self.__velocity_connectivity[:, :4]                    # (n_elems, 4)
+        unique_ids = np.unique(corners)           # sorted unique global node indices
+        # fast mapping old_idx -> new contiguous idx
+        maxid = unique_ids.max()
+        map_array = -np.ones(maxid + 1, dtype=int) # -1 for unused indices
+        map_array[unique_ids] = np.arange(unique_ids.size, dtype=int)
+
+        # produce pressure connectivity (mapped)
+        self.__pressure_connectivity = map_array[corners]        # same shape as corners (n_elems, 4)
+        self.__Np = int(unique_ids.shape[0])
+    
+    def __ss_preprocessing(self,):
+
+        self.S11, self.S22, self.S12 = self._assemble_S_mat()
+        self.R10, self.R20 = self.__assemble_R_mat()
+        print(self.R10)
+        pass
+
+
+    def __ts_preprocessing(self,):
+
+        # Compute Jacobian
+        self.__detJ = [0]*self.__Nele
+        self.__InvJ = [0]*self.__Nele
+        try: 
+            for e,con in enumerate(self.__velocity_connectivity):
+                self.__detJ[e], self.__InvJ[e] = self.velocity_element.compute_ele_properties(e,self.__nodes[con])
+        
+            # Evaluate 'Mass' and 'Stiffness' matrix. These DO NOT change with time or value of C
+            self.M = self.__assemble_M_constant_jac()
+            self.K = self.__assemble_K_constant_jac()
+
+        except NonConstantJacobian:
+            for e,con in enumerate(self.__velocity_connectivity):
+                pass
+        except Exception as e:
+            raise e
+                  
     
 
 
@@ -343,14 +396,19 @@ class IncompNavierStokesSolver2D():
         return self.__nt
     
     @property
-    def N(self):
-        """Number of nodes"""
-        return self.__N
+    def Nv(self):
+        """Number of velocity nodes"""
+        return self.__Nv
+    
+    @property
+    def Np(self):
+        """Number of pressure nodes"""
+        return self.__Np
     
     @property
     def Ne(self):
         """Number of elements"""
-        return self.__Ne
+        return self.__Nele
         
     @property
     def t(self):
@@ -370,4 +428,4 @@ class IncompNavierStokesSolver2D():
     @property
     def connectivity(self):
         """connectivity"""
-        return self.__connectivity
+        return self.__velocity_connectivity

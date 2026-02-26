@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
-from ._quadrature import triangle_quadrature
 import numpy as np
+
+from ._quadrature import triangle_quadrature
+from ._utils import NonConstantJacobian
 
 ############################################################################
 # BASIS FUNCTIONS
@@ -213,7 +215,7 @@ class _LegendreElement2D(ABC):
     n = None
     degree = None
 
-    r_Ne = None
+    r_S11 = None
     r_mass = None
 
     _A = None
@@ -221,39 +223,13 @@ class _LegendreElement2D(ABC):
     _D = None
     _M = None
     
-    def __init_subclass__(cls):
-        super().__init_subclass__()
-        if cls.n is None:
-            raise TypeError("Subclasses must define 'n'")
-        
-        if cls.degree is None:
-            raise TypeError("Subclasses must define 'degree'")
-        
-        if cls._A is None:
-            raise TypeError("Subclasses must define '__A'")
-        
-        if cls._BpC is None:
-            raise TypeError("Subclasses must define '__BpC'")
-        
-        if cls._D is None:
-            raise TypeError("Subclasses must define '__D'")
-        
-        if cls._M is None:
-            raise TypeError("Subclasses must define '__M'")
-    
-        if cls.r_Ne is None:
-            raise TypeError("Subclasses must define 'r_Ne'")
-            
-        if cls.r_mass is None:
-            raise TypeError("Subclasses must define 'r_mass'")
-    
     @staticmethod
     @abstractmethod
-    def basis_functions(xi, eta): ...
+    def basis_functions(xi, eta)->np.ndarray: ...
         
     @staticmethod
     @abstractmethod
-    def grad_basis_function(xi, eta): ...
+    def grad_basis_functions(xi, eta)->np.ndarray: ...
 
     @staticmethod
     @abstractmethod
@@ -262,46 +238,64 @@ class _LegendreElement2D(ABC):
     @abstractmethod
     def compute_ele_properties(self,nodes):...
 
+    def jacobian(self, nodes, xi,eta):
+        return nodes.T@self.grad_basis_functions(xi, eta)
     
+    def detJ(self, nodes, xi, eta):
+        return np.linalg.det(self.jacobian(nodes, xi, eta))
+   
+    def Se(self, nodes, con, S11, S22, S12):
+        for (xi,eta), wi in zip(*self.quadrature_points(self.r_S11)):
+            grad_psi_hat = self.grad_basis_functions(xi,eta)
+            jac = self.jacobian(nodes[con], xi, eta)
+            detJ = np.linalg.det(jac)
+            invJ = np.array([[jac[1,1], -jac[1,0]],
+                             [-jac[0,1], jac[0,0]]])*(1/detJ)
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            S11[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,0])*detJ*wi
+            S22[np.ix_(con,con)] += np.outer(grad_psi[:,1], grad_psi[:,1])*detJ*wi
+            S12[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,1])*detJ*wi
 
-    def Me(self, M_global, con, detJ):
-        M_global[np.ix_(con,con)] += detJ*self._M
-    
-    def Ke(self, K_global, con,detJ, invJ):
-        Se = (invJ[0,0]**2)*self._A +(invJ[0,0]*invJ[0,1])*self._BpC + (invJ[0,1]**2)*self._D
-        Sn = (invJ[1,0]**2)*self._A +(invJ[1,0]*invJ[1,1])*self._BpC + (invJ[1,1]**2)*self._D
-        K_global[np.ix_(con,con)] += detJ*(Se + Sn)
+    def _C(self, nodes, con, C_global, ve_x, ve_y):
+        Ve = np.vstack([ve_x,ve_y])
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_C)):
+            psi_hat = self.basis_functions(xi, eta)
+            grad_psi_hat = self.grad_basis_functions(xi, eta)
+            jac = self.jacobian(nodes[con], xi, eta)
+            detJ = np.linalg.det(jac)
+            invJ = np.array([[jac[1,1], -jac[1,0]],
+                             [-jac[0,1], jac[0,0]]])*(1/detJ)
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            
+            Vh = np.dot(Ve, psi_hat)
+            C_global[con] += np.outer(psi_hat, np.dot(Vh, grad_psi))*detJ*wi
+            
+            # C_global[con] += np.outer(psi_hat, ve_x[con]*grad_psi[:,0] + ve_y[con]*grad_psi[:,1])*detJ*wi
 
-    def Ne(self, N, con, detJ, Ce):
-        for (xi,eta), wi in zip(*self.quadrature_points(self.r_Ne)):
-            phi = self.basis_functions(xi,eta)
-            ch = np.dot(Ce, phi)
-            ch3 = (ch)**3
-            N[con] += (ch3 - ch)*phi*detJ*wi
-    
+
     ################################################################
     # TIME STEPPING SPECIFIC MATRICES
 
     def b2_b(self, b_global, con, detJ, Ce):
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_Ne)):
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
             phi = self.basis_functions(xi, eta)
             ch = np.dot(Ce, phi)
             ch3 = (ch)**3
             b_global[con] += (ch3 - 3*ch)*phi*(detJ)*wi
 
     def _c3(self, b_global, con, detJ, Ce):
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_Ne)):
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
             phi = self.basis_functions(xi, eta)
             ch3 = np.dot(Ce, phi)**3
             b_global[con] += ch3*phi*(detJ)*wi
 
     def compute_energy(self, detJ, invJ, Ce, eps):
         E = 0
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_Ne)):
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
             phi = self.basis_functions(xi, eta)
             ch2 = np.dot(Ce, phi)**2
 
-            grad_phi = self.grad_basis_function(xi, eta)
+            grad_phi = self.grad_basis_functions(xi, eta)
         
             grad_c = ((invJ@grad_phi.T)@Ce)
             grad_c2 = np.dot(grad_c, grad_c)
@@ -354,7 +348,7 @@ class LinearTriangularElement(_LegendreElement2D):
         return np.array([1 - xi - eta, xi, eta], dtype =float)
     
     @staticmethod
-    def grad_basis_function(xi, eta):
+    def grad_basis_functions(xi, eta):
         return np.array([[-1, -1],
                          [1, 0],
                          [0, 1]], dtype=float)
@@ -380,7 +374,7 @@ class LinearRectElement(_LegendreElement2D):
     degree:int = 1
     
     # Quadrature points
-    r_Ne:int = 3
+    r_S11: int = 3
     r_mass: int = 1
 
     _M = (1/9)*np.array([[4, 2, 2, 1],
@@ -411,7 +405,7 @@ class LinearRectElement(_LegendreElement2D):
                               (1 - xi)*(1+eta)], dtype = float)
     
     @staticmethod
-    def grad_basis_function(xi, eta):
+    def grad_basis_functions(xi, eta):
         return 0.25*np.array([[-1 + eta, -1 + xi],
                               [ 1 - eta, -1 - xi],
                               [ 1 + eta,  1 + xi],
@@ -425,7 +419,7 @@ class LinearRectElement(_LegendreElement2D):
         return np.vstack([X.ravel(), Y.ravel()]).T, np.outer(w,w).ravel()
     
     def compute_ele_properties(self, nodes):
-        J = nodes[:,:2].T@self.grad_basis_function(-1,-1)
+        J = nodes[:,:2].T@self.grad_basis_functions(-1,-1)
         a = nodes[1,0] - nodes[0,0] # width
         b = nodes[2,1] - nodes[1,1] # height
         if J[0,0] == a/2 and J[1,1] == b/2:
@@ -439,8 +433,7 @@ class QuadraticRectElement(_LegendreElement2D):
     degree:int = 2
     
     # Quadrature points
-    r_Ne:int = 5
-    r_mass: int = 3
+    r_S11:int = 5
 
     
     _M = (1/225)*np.array([[16, -4, 1, -4, 8, -2, -2, 8, 4],
@@ -497,7 +490,7 @@ class QuadraticRectElement(_LegendreElement2D):
     
     
     @staticmethod
-    def grad_basis_function(x, y):
+    def grad_basis_functions(x, y):
         return np.array([[1/4*(-1 + 2*x)*(-1 + y)*y, 1/4*x*(-1 + x)*(-1 + 2*y)],
                          [1/4*( 1 + 2*x)*(-1 + y)*y, 1/4*x*(1 + x)*(-1 + 2*y)],
                          [1/4*( 1 + 2*x)*(1 + y)*y,  1/4*x*(1 + x)*(1 + 2*y)],
@@ -516,12 +509,14 @@ class QuadraticRectElement(_LegendreElement2D):
         X, Y = np.meshgrid(x, x)
         return np.vstack([X.ravel(), Y.ravel()]).T, np.outer(w,w).ravel()
     
-    def compute_ele_properties(self, nodes):
-        J = nodes[:,:2].T@self.grad_basis_function(-1,-1)
+
+
+    def compute_ele_properties(self,e, nodes):
+        J = nodes[:,:2].T@self.grad_basis_functions(-1,-1)
         a = nodes[1,0] - nodes[0,0] # width
         b = nodes[2,1] - nodes[1,1] # height
         if np.isclose(2*J[0,0], a) and np.isclose(2*J[1,1],b):
             return a*b/4, np.diag([2/a, 2/b])
         else:
-            raise ValueError("Rectangular element is not aligned with axis")
+            raise NonConstantJacobian(e)
     

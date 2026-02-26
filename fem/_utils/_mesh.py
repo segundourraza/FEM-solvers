@@ -1,5 +1,6 @@
 import pygmsh
 import numpy as np
+from typing import Dict, List, Tuple
 
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
@@ -179,6 +180,100 @@ def generate_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='complete'):
         return nodes, np.array(conn, dtype=int)
 
 
+Segment = Tuple[int, int]
+SegmentWithElem = Tuple[Segment, int]
+EdgesDict = Dict[str, List[SegmentWithElem]]
+
+def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
+                                 order: int = 1, element: str = 'complete') -> EdgesDict:
+    """
+    Return linear boundary edge segments with the element id each segment belongs to.
+
+    Parameters
+    ----------
+    conn : array-like, shape (n_elems, nodes_per_elem)
+        Element connectivity. Assumes first 4 entries are corners [bl, br, tr, tl].
+    nx, ny : int
+        Number of elements in x and y directions.
+    order : int
+        1 or 2.
+    element : str
+        For order==2: 'serendipity' or 'complete' (affects nodal layout).
+
+    Returns
+    -------
+    edges : dict
+        keys: 'bottom','right','top','left'
+        values: lists of (segment, elem_id) where segment is (n_start, n_end)
+                 and elem_id is the index of the element in conn that owns that edge.
+    """
+    conn = np.asarray(conn, dtype=int)
+    if order not in (1, 2):
+        raise ValueError("order must be 1 or 2")
+    if order == 2 and element not in ('serendipity', 'complete'):
+        raise ValueError("element must be 'serendipity' or 'complete' for order==2")
+    if nx <= 0 or ny <= 0:
+        raise ValueError("nx and ny must be positive integers")
+
+    def elem_index(ex: int, ey: int) -> int:
+        return ey * nx + ex
+
+    edges: EdgesDict = {'bottom': [], 'right': [], 'top': [], 'left': []}
+
+    # bottom: ey=0, ex=0..nx-1, direction left->right
+    ey = 0
+    for ex in range(0, nx):
+        e = conn[elem_index(ex, ey)]
+        elem_id = elem_index(ex, ey)
+        n_bl, n_br = int(e[0]), int(e[1])
+        if order == 1:
+            edges['bottom'].append(((n_bl, n_br), elem_id))
+        else:
+            nmid = int(e[4])   # mid-bottom at index 4 in our ordering
+            edges['bottom'].append(((n_bl, nmid), elem_id))
+            edges['bottom'].append(((nmid, n_br), elem_id))
+
+    # right: ex=nx-1, ey=0..ny-1, bottom->top
+    ex = nx - 1
+    for ey in range(0, ny):
+        e = conn[elem_index(ex, ey)]
+        elem_id = elem_index(ex, ey)
+        n_br, n_tr = int(e[1]), int(e[2])
+        if order == 1:
+            edges['right'].append(((n_br, n_tr), elem_id))
+        else:
+            nmid = int(e[5])   # mid-right at index 5
+            edges['right'].append(((n_br, nmid), elem_id))
+            edges['right'].append(((nmid, n_tr), elem_id))
+
+    # top: ey=ny-1, ex=nx-1..0, direction right->left (keep consistent orientation)
+    ey = ny - 1
+    for ex in range(nx - 1, -1, -1):
+        e = conn[elem_index(ex, ey)]
+        elem_id = elem_index(ex, ey)
+        n_tr, n_tl = int(e[2]), int(e[3])
+        if order == 1:
+            edges['top'].append(((n_tr, n_tl), elem_id))
+        else:
+            nmid = int(e[6])   # mid-top at index 6
+            edges['top'].append(((n_tr, nmid), elem_id))
+            edges['top'].append(((nmid, n_tl), elem_id))
+
+    # left: ex=0, ey=ny-1..0, direction top->bottom
+    ex = 0
+    for ey in range(ny - 1, -1, -1):
+        e = conn[elem_index(ex, ey)]
+        elem_id = elem_index(ex, ey)
+        n_tl, n_bl = int(e[3]), int(e[0])
+        if order == 1:
+            edges['left'].append(((n_tl, n_bl), elem_id))
+        else:
+            nmid = int(e[7])   # mid-left at index 7
+            edges['left'].append(((n_tl, nmid), elem_id))
+            edges['left'].append(((nmid, n_bl), elem_id))
+
+    return edges
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
@@ -232,5 +327,24 @@ if __name__ == "__main__":
     plt.plot(nodes[:,0], nodes[:,1], '.')
     for e, con in enumerate(conn):
         plt.plot(nodes[con,0], nodes[con,1], '-')
+
+    
+
+    # generate a 2nd-order rectangular mesh (for example)
+    nodes, conn = generate_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=0.5, order=2)
+    edges = boundary_edges_connectivity(conn, nx=4, ny=2, order=2, element='complete')
+    plt.figure()
+    plt.plot(nodes[:,0], nodes[:,1], '.')
+    for e, con in enumerate(conn):
+        plt.plot(nodes[con,0], nodes[con,1], '--')
+    for k,v in edges.items():
+        for edge in v:
+            temp = np.vstack(nodes[edge[0],:]).T
+            plt.plot(*temp, '-')
+    print("Bottom edges (count):", len(edges['bottom']))
+    print("First bottom edge nodes:", edges['bottom'][0])
+    print("Right edges (count):", len(edges['right']))
+    print("Top edges (count):", len(edges['top']))
+    print("Left edges (count):", len(edges['left']))
 
     plt.show()
