@@ -1,8 +1,6 @@
 import pygmsh
 import numpy as np
 
-
-
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
 
