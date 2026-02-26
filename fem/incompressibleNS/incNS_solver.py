@@ -153,14 +153,19 @@ class IncompNavierStokesSolver2D():
     @classmethod
     def rectangular_domain_rect(cls, height, width, nx, ny, order):
         """
-        Generate a 2D triangular mesh of a rectangle height x width.
+        Generate a 2D rectangular mesh of a rectangle height x width.
         """
         nodes, connectivity = generate_rect_mesh(nx, ny, width, height, order=order)
         return cls(nodes=nodes, connectivity=connectivity)
     
     @classmethod
-    def 
-
+    def duct_domain_rect(cls, h1, h2, width, nx, ny, order):
+        """
+        Generate a 2D duct mesh of a rectangle height x width.
+        """
+        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order)
+        return cls(nodes=nodes, connectivity=connectivity)
+    
     #####################################################################
     # AUXILIARY FUNCTIONS
     def plot_mesh(self, ax = None, linewidth = 0.6, color = 'k', plot_nodes = True, node_color = 'k', node_size = 6, **kwargs):
