@@ -1,6 +1,4 @@
-STABILIZATION_CONSTANT = 2.5
 LEAVE_TQDM_BAR = True
-
 
 try: 
     from tqdm import tqdm
