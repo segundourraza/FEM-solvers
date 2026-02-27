@@ -17,11 +17,6 @@ if __name__ == '__main__':
 
 
     rho = mu = 1
-
-    sol = IncompNavierStokesSolver2D.rectangular_domain_rect(a, b,
-                                                      nx, ny,
-                                                      order = order)
-    
     
     ##############################################################################
     # BCS
@@ -35,7 +30,7 @@ if __name__ == '__main__':
             metadata={"Vx": 0, "Vy": Vv}
         )
     
-    bc_stressfree_outlet = BoundaryCondition(
+    bc_outlet = BoundaryCondition(
             name="outlet-stressfree",
             boundary_key="right",
             bc_type=BCType.NEUMANN,
@@ -68,13 +63,29 @@ if __name__ == '__main__':
         )
             
     
-
-    boundary_conditions = [bc_left_wall, bc_right_wall, bc_top, bc_stressfree_outlet]
-
+    boundary_conditions = [bc_left_wall, bc_right_wall, bc_top, bc_outlet]
+    
+    
+    ######################################################################
+    # START SETTING UP SOLVER
+    
+    sol = IncompNavierStokesSolver2D.rectangular_domain_rect(a, b,
+                                                      nx, ny,
+                                                      order = order)
     sol.setup_physics(rho, mu)
+    sol.setup_boundary_conditions(boundary_conditions)
+
+    ####################
+    # EXECUTE
     sol.solve_steadystate(0)
 
+    
+    
+    ####################
+    # PLOTTING
     sol.plot_mesh()
+    
+    
+    
+    
     plt.show()
-
-

@@ -1,6 +1,7 @@
 import h5py
 from datetime import timezone, datetime
 from pathlib import Path
+from typing import Iterable
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ import scipy.linalg as sp
 from scipy.sparse import csc_matrix, bmat
 import scipy.sparse.linalg as linalg
 
+from ._bcs import BoundaryCondition, BCVar, BCType
 
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity
@@ -19,7 +21,8 @@ from .._utils._mesh import EdgesDict
 class IncompNavierStokesSolver2D():
     
     __setup_physics = False
-    
+    __setup_bcs = False
+
     def __init__(self, nodes: np.ndarray, connectivity: np.ndarray, boundary_edges:EdgesDict):
         
         # Nodes and connectivity
@@ -47,15 +50,62 @@ class IncompNavierStokesSolver2D():
         
         self.__edges: EdgesDict = boundary_edges
 
+
+
+    #####################################################################
+    # CONSTRUCTORS
+    @classmethod
+    def rectangular_domain_tri(cls, height, width, mesh_size = 0.08):
+        """
+        Generate a 2D triangular mesh of a rectangle height x width.
+        """
+        nodes, connectivity = generate_rectangular_domain(height=height, width=width, mesh_size=mesh_size)
+        return cls(nodes=nodes, connectivity=connectivity)
+    
+    @classmethod
+    def rectangular_domain_rect(cls, height, width, nx, ny, order, element = 'complete'):
+        """
+        Generate a 2D rectangular mesh of a rectangle height x width.
+        """
+        nodes, connectivity = generate_rect_mesh(nx, ny, width, height, order=order)
+        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
+    
+    @classmethod
+    def duct_domain_rect(cls, h1, h2, width, nx, ny, order,element = 'complete'):
+        """
+        Generate a 2D duct mesh of a rectangle height x width.
+        """
+        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order,element=element)
+        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
+    
+
+
+    ###############################################################
+    # SETTING UP METHODS
     def setup_physics(self, rho, viscosity):
         self.rho = rho
         self.mu = viscosity
         
         self.__setup_physics = True
 
+    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition]):
+        for bc in bc_list:
+            if isinstance(bc, BoundaryCondition):
+                bc.attach_segments_from_edges(edges_dict=self.__edges)
+            else:
+                raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
+        self.__boundary_conditions = bc_list
+        self.__setup_bcs = True
 
+
+
+
+    ###############################################################
+    # SIMULATION EXECUTION
     def solve_steadystate(self, u0, nonlinear_solver_options:dict = {}):
-        if not self.__setup_physics:
+        if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
 
         self.__ss_preprocessing()
@@ -156,34 +206,6 @@ class IncompNavierStokesSolver2D():
         return C
     
 
-    #####################################################################
-    # CONSTRUCTORS
-    @classmethod
-    def rectangular_domain_tri(cls, height, width, mesh_size = 0.08):
-        """
-        Generate a 2D triangular mesh of a rectangle height x width.
-        """
-        nodes, connectivity = generate_rectangular_domain(height=height, width=width, mesh_size=mesh_size)
-        return cls(nodes=nodes, connectivity=connectivity)
-    
-    @classmethod
-    def rectangular_domain_rect(cls, height, width, nx, ny, order, element = 'complete'):
-        """
-        Generate a 2D rectangular mesh of a rectangle height x width.
-        """
-        nodes, connectivity = generate_rect_mesh(nx, ny, width, height, order=order)
-        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
-        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
-    
-    @classmethod
-    def duct_domain_rect(cls, h1, h2, width, nx, ny, order,element = 'complete'):
-        """
-        Generate a 2D duct mesh of a rectangle height x width.
-        """
-        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order,element=element)
-        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
-        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
-    
     #####################################################################
     # AUXILIARY FUNCTIONS
     def plot_mesh(self, ax = None, linewidth = 0.6, color = 'k', plot_nodes = True, node_color = 'k', node_size = 6, **kwargs):
@@ -356,9 +378,8 @@ class IncompNavierStokesSolver2D():
 
         self.S11, self.S22, self.S12 = self._assemble_S_mat()
         self.R10, self.R20 = self.__assemble_R_mat()
-        print(self.R10)
-        pass
 
+        pass
 
     def __ts_preprocessing(self,):
 
@@ -378,7 +399,11 @@ class IncompNavierStokesSolver2D():
                 pass
         except Exception as e:
             raise e
-                  
+
+
+    def Residual(self,evaluation_u):
+        pass
+
     
 
 
