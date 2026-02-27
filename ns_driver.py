@@ -1,15 +1,11 @@
-from fem import IncompNavierStokesSolver2D
+from fem import IncompNavierStokesSolver2D, BoundaryCondition, BCType, BCVar
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 
 np.set_printoptions(linewidth=320)
 
-from dataclasses import dataclass
-
-@dataclass
-class BoundaryCondition:
-
-    type
 
 if __name__ == '__main__':
     # THE FINITE ELEMENT METHOD IN HEAT TRANSFER AND FLUID DYNAMICS
@@ -27,7 +23,53 @@ if __name__ == '__main__':
                                                       order = order)
     
     
-    boundary_conditions = {'left':}
+    ##############################################################################
+    # BCS
+    Vv = -1.0
+    bc_top = BoundaryCondition(
+            name="moving-top-wall",
+            boundary_key="top",
+            bc_type=BCType.DIRICHLET,
+            variable=BCVar.VELOCITY,
+            value=lambda x, y, t: (0, Vv),
+            metadata={"Vx": 0, "Vy": Vv}
+        )
+    
+    bc_stressfree_outlet = BoundaryCondition(
+            name="outlet-stressfree",
+            boundary_key="right",
+            bc_type=BCType.NEUMANN,
+            variable=BCVar.VELOCITY,
+            traction=lambda x, y, t: (0.0, 0.0),
+            apply_strong=False,
+            metadata={"description": "do-nothing / traction-free outlet"}
+        )
+
+    bc_left_wall = BoundaryCondition(
+            name="bottom-wall-symmetry",
+            boundary_key="bottom",
+            bc_type=BCType.NEUMANN,
+            variable=BCVar.VELOCITY,
+            value=(None, 0.0),
+            traction=(0.0, None),
+            apply_strong=True,
+            metadata={"note": "symmetry wall"}
+        )
+
+    bc_right_wall = BoundaryCondition(
+            name="left-wall-symmetry",
+            boundary_key="left",
+            bc_type=BCType.NEUMANN,
+            variable=BCVar.VELOCITY,
+            value=(0.0, None),
+            traction=(None, 0.0),
+            apply_strong=True,
+            metadata={"note": "symmetry wall"}
+        )
+            
+    
+
+    boundary_conditions = [bc_left_wall, bc_right_wall, bc_top, bc_stressfree_outlet]
 
     sol.setup_physics(rho, mu)
     sol.solve_steadystate(0)
