@@ -1,6 +1,6 @@
 import pygmsh
 import numpy as np
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
@@ -274,6 +274,145 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
 
     return edges
 
+
+
+import numpy as np
+from typing import List, Tuple, Dict, Optional
+
+def _cluster_x_stations(nodes: np.ndarray, indices: np.ndarray, tol: float):
+    """
+    Helper: cluster the x-values of `nodes[indices]` into stations using tol.
+    Returns list of representative x (mean) and list of lists of node indices (sorted by y).
+    """
+    xs = nodes[indices, 0]
+    ys = nodes[indices, 1]
+    # sort by x then y
+    order = np.lexsort((ys, xs))
+    xs_s = xs[order]
+    idx_s = indices[order]
+
+    stations = []
+    station_lists = []
+    for xval, nidx in zip(xs_s, idx_s):
+        if not stations:
+            stations.append(xval)
+            station_lists.append([int(nidx)])
+            continue
+        if abs(xval - stations[-1]) <= tol:
+            station_lists[-1].append(int(nidx))
+        else:
+            stations.append(xval)
+            station_lists.append([int(nidx)])
+
+    reps = []
+    final_groups = []
+    for idx_list in station_lists:
+        idx_arr = np.array(idx_list, dtype=int)
+        # sort by y ascending
+        order_y = np.argsort(nodes[idx_arr, 1], kind='stable')
+        sorted_idx = idx_arr[order_y].tolist()
+        final_groups.append(sorted_idx)
+        reps.append(float(np.mean(nodes[idx_arr, 0])))
+
+    return np.array(reps, dtype=float), final_groups
+
+def group_nodes_by_x(
+    nodes: np.ndarray,
+    conn: Optional[np.ndarray] = None,
+    order: int = 1,
+    tol: float = 1e-12) -> Tuple[Dict[float, List[int]], Dict[float, List[int]]
+]:
+    """
+    Group nodes by x-station (all nodes) and also return the subset of stations
+    that correspond to element vertical edges (i.e. x-values of corner nodes).
+
+    Parameters
+    ----------
+    nodes : (N,2) array-like
+        Node coordinates [[x0,y0], [x1,y1], ...].
+    conn : optional (n_elems, nodes_per_elem) connectivity array
+        If provided, corner node indices are taken from conn[:, :4] to compute edge stations.
+        If not provided and order==2, the function will attempt to infer edge x-stations by
+        selecting unique x-values that align with a coarse spacing (less robust).
+    order : int
+        Element order: 1 or 2. For order==1 edge stations == all stations.
+    tol : float
+        Tolerance for grouping x-values.
+
+    Returns
+    -------
+    all_x_vals, all_groups, all_map, edge_x_vals, edge_groups, edge_map
+    """
+    nodes = np.asarray(nodes, dtype=float)
+    if nodes.ndim != 2 or nodes.shape[1] != 2:
+        raise ValueError("nodes must be shape (N,2)")
+
+    N = nodes.shape[0]
+
+    # --- all stations (using all nodes) ---
+    all_indices = np.arange(N, dtype=int)
+    all_x_vals, all_groups = _cluster_x_stations(nodes, all_indices, tol)
+    # sort ascending (already should be sorted)
+    sort_idx = np.argsort(all_x_vals)
+    all_x_vals = all_x_vals[sort_idx]
+    all_groups = [all_groups[i] for i in sort_idx]
+    all_map = {float(all_x_vals[i]): np.array(all_groups[i]) for i in range(len(all_x_vals))}
+
+    # --- edge/corner stations ---
+    if order == 1:
+        # identical
+        edge_x_vals = all_x_vals.copy()
+        edge_groups = list(all_groups)
+        edge_map = dict(all_map)
+        return all_x_vals, all_groups, all_map, edge_x_vals, edge_groups, edge_map
+
+    # order == 2: prefer to compute edge stations from corner nodes in conn[:,:4]
+    edge_x_vals = None
+    edge_groups = None
+
+    if conn is not None:
+        conn = np.asarray(conn, dtype=int)
+        if conn.ndim != 2 or conn.shape[1] < 4:
+            raise ValueError("conn must be shape (n_elems, >=4) with corners in first 4 entries")
+
+        corner_idx = np.unique(conn[:, :4].ravel())
+        # cluster only the corner nodes
+        reps, groups = _cluster_x_stations(nodes, corner_idx, tol)
+        # sort
+        sort_idx = np.argsort(reps)
+        edge_x_vals = reps[sort_idx]
+        edge_groups = [groups[i] for i in sort_idx]
+    else:
+        # fallback: attempt to infer edge stations from all_x_vals by selecting a subset
+        # (less robust). We choose every other station if pattern fits.
+        nstations = len(all_x_vals)
+        if (nstations - 1) % 2 == 0:
+            expected = (nstations - 1) // 2
+            # pick even-indexed stations
+            indices = np.arange(0, nstations, 2, dtype=int)
+            edge_x_vals = all_x_vals[indices].copy()
+            edge_groups = [all_groups[i] for i in indices.tolist()]
+        else:
+            # last fallback: pick unique x among nodes with minimal count equal to len(all)/2 approx
+            # use unique x among nodes that have maximum y-span (likely corners)
+            # heuristic: pick nodes with min y or max y (bottom/top) as corners, collect their x
+            bottom_nodes = np.where(nodes[:,1] == nodes[:,1].min())[0]
+            top_nodes = np.where(nodes[:,1] == nodes[:,1].max())[0]
+            candidate = np.unique(np.concatenate([bottom_nodes, top_nodes]))
+            if candidate.size > 0:
+                reps, groups = _cluster_x_stations(nodes, candidate, tol)
+                sort_idx = np.argsort(reps)
+                edge_x_vals = reps[sort_idx]
+                edge_groups = [groups[i] for i in sort_idx]
+            else:
+                # fallback to all
+                edge_x_vals = all_x_vals.copy()
+                edge_groups = list(all_groups)
+
+    edge_map = {float(edge_x_vals[i]): np.array(edge_groups[i]) for i in range(len(edge_groups))}
+    return all_map, edge_map
+
+
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
@@ -346,5 +485,15 @@ if __name__ == "__main__":
     print("Right edges (count):", len(edges['right']))
     print("Top edges (count):", len(edges['top']))
     print("Left edges (count):", len(edges['left']))
+
+
+
+
+    all_map, edge_map = \
+        group_nodes_by_x(nodes, conn, order=2, tol=1e-9)
+    for k,v in all_map.items():
+        plt.plot(nodes[v,0], nodes[v,1], 'o', markerfacecolor = 'none', ms = 10, markeredgewidth = 2)
+    for k,v in edge_map.items():
+        plt.plot(nodes[v,0], nodes[v,1], 's', markerfacecolor = 'none', ms = 15, markeredgewidth = 2)
 
     plt.show()

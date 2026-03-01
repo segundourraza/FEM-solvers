@@ -215,14 +215,11 @@ class _LegendreElement2D(ABC):
     n = None
     degree = None
 
-    r_S11 = None
-    r_mass = None
+    r_viscous = None
+    r_convective = None
 
-    _A = None
-    _BpC = None
-    _D = None
-    _M = None
-    
+
+
     @staticmethod
     @abstractmethod
     def basis_functions(xi, eta)->np.ndarray: ...
@@ -245,7 +242,7 @@ class _LegendreElement2D(ABC):
         return np.linalg.det(self.jacobian(nodes, xi, eta))
    
     def Se(self, nodes, con, S11, S22, S12):
-        for (xi,eta), wi in zip(*self.quadrature_points(self.r_S11)):
+        for (xi,eta), wi in zip(*self.quadrature_points(self.r_viscous)):
             grad_psi_hat = self.grad_basis_functions(xi,eta)
             jac = self.jacobian(nodes[con], xi, eta)
             detJ = np.linalg.det(jac)
@@ -258,7 +255,7 @@ class _LegendreElement2D(ABC):
 
     def _C(self, nodes, con, C_global, ve_x, ve_y):
         Ve = np.vstack([ve_x,ve_y])
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_C)):
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
             psi_hat = self.basis_functions(xi, eta)
             grad_psi_hat = self.grad_basis_functions(xi, eta)
             jac = self.jacobian(nodes[con], xi, eta)
@@ -272,44 +269,34 @@ class _LegendreElement2D(ABC):
             
             # C_global[con] += np.outer(psi_hat, ve_x[con]*grad_psi[:,0] + ve_y[con]*grad_psi[:,1])*detJ*wi
 
-
-    ################################################################
-    # TIME STEPPING SPECIFIC MATRICES
-
-    def b2_b(self, b_global, con, detJ, Ce):
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
-            phi = self.basis_functions(xi, eta)
-            ch = np.dot(Ce, phi)
-            ch3 = (ch)**3
-            b_global[con] += (ch3 - 3*ch)*phi*(detJ)*wi
-
-    def _c3(self, b_global, con, detJ, Ce):
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
-            phi = self.basis_functions(xi, eta)
-            ch3 = np.dot(Ce, phi)**3
-            b_global[con] += ch3*phi*(detJ)*wi
-
-    def compute_energy(self, detJ, invJ, Ce, eps):
-        E = 0
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_S11)):
-            phi = self.basis_functions(xi, eta)
-            ch2 = np.dot(Ce, phi)**2
-
-            grad_phi = self.grad_basis_functions(xi, eta)
-        
-            grad_c = ((invJ@grad_phi.T)@Ce)
-            grad_c2 = np.dot(grad_c, grad_c)
+    def _C1n2(self, nodes, con, C1, C2, ve_x, ve_y):
+        Ve = np.vstack([ve_x[con],ve_y[con]])
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
+            psi_hat = self.basis_functions(xi, eta)
+            grad_psi_hat = self.grad_basis_functions(xi, eta)
+            jac = self.jacobian(nodes[con], xi, eta)
+            detJ = np.linalg.det(jac)
+            invJ = np.array([[jac[1,1], -jac[1,0]],
+                             [-jac[0,1], jac[0,0]]])*(1/detJ)
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
             
-            E += (1/(4*eps)*(1- ch2**2)**2 + eps/2*grad_c2)*(detJ)*wi
-        return E
+            Vh = np.dot(Ve, psi_hat)
+            C1[np.ix_(con,con)] += np.outer(psi_hat.T, grad_psi[:,0])*Vh[0]*detJ*wi
+            C2[np.ix_(con,con)] += np.outer(psi_hat.T, grad_psi[:,1])*Vh[1]*detJ*wi
     
-    def compute_mass(self, detJ, Ce):
-        dM = 0
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_mass)):
-            phi = self.basis_functions(xi, eta)
-            ch = np.dot(Ce, phi)
-            dM += ch*(detJ)*wi
-        return dM
+    def _C1n2_extra(self, nodes, con, C1, C2):
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
+            psi_hat = self.basis_functions(xi, eta)
+            grad_psi_hat = self.grad_basis_functions(xi, eta)
+            jac = self.jacobian(nodes[con], xi, eta)
+            detJ = np.linalg.det(jac)
+            invJ = np.array([[jac[1,1], -jac[1,0]],
+                             [-jac[0,1], jac[0,0]]])*(1/detJ)
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            
+            C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*detJ*wi
+            C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*detJ*wi
+            
 class LinearTriangularElement(_LegendreElement2D):
     
     n = 3 # Number of nodes in element
@@ -374,28 +361,8 @@ class LinearRectElement(_LegendreElement2D):
     degree:int = 1
     
     # Quadrature points
-    r_S11: int = 3
-    r_mass: int = 1
-
-    _M = (1/9)*np.array([[4, 2, 2, 1],
-                         [2, 4, 1, 2],
-                         [2, 1, 4, 2],
-                         [1, 2, 2, 4]], dtype=float)
-    
-    _A   = 1/6*np.array([[ 2, -2, -1,  1],
-                         [-2,  2,  1, -1],
-                         [-1,  1,  2, -2],
-                         [ 1, -1, -2,  2]], dtype=float)
-
-    _D = 1/6*np.array([[ 2,  1,  -1, -2],
-                       [ 1,  2,  -2, -1],
-                       [-1, -2,  2,  1],
-                       [-2, -1,  1,  2]], dtype=float)
-
-    _BpC = 1/2*np.array([[ 1,  0, -1,  0],
-                         [ 0, -1,  0,  1],
-                         [-1,  0,  1,  0],
-                         [ 0,  1,  0, -1]], dtype=float)
+    r_viscous: int = 2
+    r_convective: int = 2
    
     @staticmethod
     def basis_functions(xi, eta):
@@ -433,49 +400,9 @@ class QuadraticRectElement(_LegendreElement2D):
     degree:int = 2
     
     # Quadrature points
-    r_S11:int = 5
+    r_viscous: int    = 3
+    r_convective: int = 4
 
-    
-    _M = (1/225)*np.array([[16, -4, 1, -4, 8, -2, -2, 8, 4],
-                           [-4, 16, -4, 1, 8, 8, -2, -2, 4],
-                           [1, -4, 16, -4, -2, 8, 8, -2, 4],
-                           [-4, 1, -4, 16, -2, -2, 8, 8, 4],
-                           [8, 8, -2, -2, 64, 4, -16, 4, 32],
-                           [-2, 8, 8, -2, 4, 64, 4, -16, 32],
-                           [-2, -2, 8, 8, -16, 4, 64, 4, 32],
-                           [8, -2, -2, 8, 4, -16, 4, 64, 32],
-                           [4, 4, 4, 4, 32, 32, 32, 32, 256]], dtype = float)
-
-    _A = 1/90 * np.array([[28, 4, -1, -7, -32, 2, 8, 14, -16],
-                          [4, 28, -7, -1, -32, 14, 8, 2, -16],
-                          [-1, -7, 28, 4, 8, 14, -32, 2, -16],
-                          [-7, -1, 4, 28, 8, 2, -32, 14, -16],
-                          [-32, -32, 8, 8, 64, -16, -16, -16, 32],
-                          [2, 14, 14, 2, -16, 112, -16, 16, -128],
-                          [8, 8, -32, -32, -16, -16, 64, -16, 32],
-                          [14, 2, 2, 14, -16, 16, -16, 112, -128],
-                          [-16, -16, -16, -16, 32, -128, 32, -128, 256]], dtype=float)
-
-    _D   = 1/90*np.array([[28, -7, -1, 4, 14, 8, 2, -32, -16],
-                          [-7, 28, 4, -1, 14, -32, 2, 8, -16],
-                          [-1, 4, 28, -7, 2, -32, 14, 8, -16],
-                          [4, -1, -7, 28, 2, 8, 14, -32, -16],
-                          [14, 14, 2, 2, 112, -16, 16, -16, -128],
-                          [8, -32, -32, 8, -16, 64, -16, -16, 32],
-                          [2, 2, 14, 14, 16, -16, 112, -16, -128],
-                          [-32, 8, 8, -32, -16, -16, -16, 64, 32],
-                          [-16, -16, -16, -16, -128, 32, -128, 32, 256]], dtype=float)
-    
-    _BpC = 1/18 * np.array([[9, 0, -1, 0, 0, 4, 4, 0, -16],
-                            [0, -9, 0, 1, 0, 0, -4, -4, 16],
-                            [-1, 0, 9, 0, 4, 0, 0, 4, -16],
-                            [0, 1, 0, -9, -4, -4, 0, 0, 16],
-                            [0, 0, 4, -4, 0, -16, 0, 16, 0],
-                            [4, 0, 0, -4, -16, 0, 16, 0, 0],
-                            [4, -4, 0, 0, 0, 16, 0, -16, 0],
-                            [0, -4, 4, 0, 16, 0, -16, 0, 0],
-                            [-16, 16, -16, 16, 0, 0, 0, 0, 0]], dtype= float)
-    
     @staticmethod
     def basis_functions(xi, eta):
         return np.array([0.25*(xi**2 - xi)*(eta**2 - eta),
