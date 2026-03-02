@@ -10,13 +10,13 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.sparse import csc_matrix, bmat, csr_matrix
 
-from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList
+from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode
 
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity,
                       group_nodes_by_x)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
-from .._utils._mesh import EdgesDict
+from .._utils._mesh import EdgesDict, find_corners_fromSegmentsWithElem
 
 
 class IncompNavierStokesSolver2D():
@@ -93,14 +93,20 @@ class IncompNavierStokesSolver2D():
         
         self.__setup_physics = True
 
-    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition]):
+    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_node:PressureReferenceNode = None):
         for bc in bc_list:
             if isinstance(bc, BoundaryCondition):
                 bc.attach_segments_from_edges(edges_dict=self.__edges)
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
         self.__bc_list = bc_list
-        self.__setup_bcs = True
+        corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_list])
+        print(corners)
+        if pref_node is None:
+            self.p_ref_node = PressureReferenceNode(0.0, )
+
+        self.__setup_bcs = False
+        
 
 
 
@@ -241,13 +247,15 @@ class IncompNavierStokesSolver2D():
         mask = np.ones(self.ndof, dtype=bool)
         mask[fixed_idx] = False
         free_idx = np.nonzero(mask)[0].astype(int)
+        print(fixed_idx)
+        print(free_idx)
 
         # Partition vectors/matrices
         # Δ_c (fixed) = prescribed - current
         delta_c = np.zeros(len(fixed_idx), dtype=float)
         for i, dof in enumerate(fixed_idx):
             delta_c[i] = fixed[dof] - u[dof]
-        
+        print(Jac[free_idx])
         # Build J_ff (free x free), J_fc (free x fixed), R_f
         # ensure CSR for slicing
         J_ff = Jac[free_idx][:, free_idx].tocsc()   # use CSC for solve if needed
@@ -262,14 +270,12 @@ class IncompNavierStokesSolver2D():
         # convert to CSR for spsolve
         lu = spla.splu(J_ff)
         delta_f = lu.solve(rhs_f)
-        print(delta_f)
 
         J_cf = Jac[fixed_idx][:, free_idx].tocsc()
         J_cc = Jac[fixed_idx][:, fixed_idx]          
         R_c = Res[fixed_idx]
         rhs_c = -R_c - (J_cc.dot(delta_c))
         delta_f = spla.lsqr(J_cf, rhs_c)[0]
-        print(delta_f)
 
         
         # Build full delta
@@ -279,9 +285,9 @@ class IncompNavierStokesSolver2D():
         return delta
 
     def _NewtonRaphson(self, u_prev, RnJ,
-                       tol = 1e-8, max_iter = 10,
+                       tol = 1e-8, max_iter = 1,
                        line_search = None, relaxation_parameter = 0,
-                       verbose = True, run_checks = False):
+                       verbose = True, run_checks = True):
         """
         Newton solver for one implicit time-step.
         u_prev : vector at previous time step (size 2*N)
@@ -309,7 +315,8 @@ class IncompNavierStokesSolver2D():
             # build residual and jacobian at current iterate
             Res, Jac = RnJ(u_prev, u)
             res_norm = np.linalg.norm(Res)
-            
+            if verbose:
+                print('Iteration: {}'.format(k))
             if run_checks:
                 j_res= self.fd_jacobian_check(RnJ, u_prev, u)
                 print(f"\t Jacobian relative error = {j_res:.4e}")
@@ -320,14 +327,6 @@ class IncompNavierStokesSolver2D():
             # map pressure reference to DOF index if provided (p_ref_node is pressure-node index)
             p_ref_dof = self.p_dof(self.p_ref_node) if self.p_ref_node is not None else None
 
-
-            # import matplotlib.pyplot as plt
-            # id = list(_%self.__N_vel_nodes for _ in fixed_vel.keys())
-            # plt.plot(self.__nodes[id,0], self.__nodes[id,1], 'xr', ms = 9)
-            # # print(p_ref_dof, self.p_ref_node)
-            # # plt.plot(self.__nodes[p_ref_dof,0], self.__nodes[p_ref_dof,1], 'sb', ms = 9)
-            # plt.show()
-            # break
             
             # Add Neumann traction contributions into R here as needed
             # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
@@ -337,8 +336,10 @@ class IncompNavierStokesSolver2D():
             if not use_sparse:
                 raise ValueError
             delta = self.__newton_step_elimination(Res, Jac, u, fixed_vel)
-
-            
+            # print("\t", u[list(fixed_vel)])
+            # print("\t", u)
+            # print("\t", delta)
+            break               
             # update rule
             u = update_rule(u_prev, u, delta, res_norm)
             
@@ -558,8 +559,6 @@ class IncompNavierStokesSolver2D():
         for bc in self.__bc_list:
             if not getattr(bc, "active", True):
                 continue
-            if bc.bc_type != BCType.DIRICHLET:
-                continue
             if bc.variable not in (BCVar.VELOCITY, BCVar.BOTH):
                 continue
 
@@ -705,7 +704,7 @@ class IncompNavierStokesSolver2D():
     def vx_dof(self, node_idx: int) -> int:
         return int(node_idx)
     
-    def vy_dof(self,node_idx: int) -> int:
+    def vy_dof(self, node_idx: int) -> int:
         return int(self.__N_vel_nodes + node_idx)
     
     def p_dof(self, pnode_idx: int) -> int:

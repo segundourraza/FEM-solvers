@@ -1,6 +1,7 @@
 import pygmsh
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from collections import defaultdict
+from typing import Dict, List, Tuple, Optional, Iterable
 
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
@@ -274,10 +275,27 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
 
     return edges
 
+def find_corners_fromSegmentsWithElem(edges_list:List[List[SegmentWithElem]]):
 
 
-import numpy as np
-from typing import List, Tuple, Dict, Optional
+    seen_index = set()
+    vertex_index = set()
+    for edges in edges_list:
+        for segWele in edges:
+            print(segWele)
+            index = segWele[0][1]
+            print('\t', index)
+            if index in seen_index:
+                if index in vertex_index:
+                    raise RuntimeError("WTF is this edge connectivity")
+                vertex_index.add(index)
+                seen_index.remove(index)
+            else:
+                seen_index.add(index)
+
+    return vertex_index
+
+
 
 def _cluster_x_stations(nodes: np.ndarray, indices: np.ndarray, tol: float):
     """

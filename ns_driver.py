@@ -22,9 +22,11 @@ if __name__ == '__main__':
     nx = 3
     ny = 5
     
+    nx = 2
+    ny = 2
+    
     nx = 1
     ny = 1
-    
     
     
     order = 2
@@ -40,7 +42,7 @@ if __name__ == '__main__':
             boundary_key="top",
             bc_type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
-            value=lambda x, y, t: (0, Vw),
+            value=lambda x, y, t: (0, -Vw),
             metadata={"Vx": 0, "Vy": Vw}
         )
     
@@ -75,7 +77,8 @@ if __name__ == '__main__':
             apply_strong=True,
             metadata={"note": "symmetry wall"}
         )
-            
+    
+    
     
     boundary_conditions = [bc_left_wall, bc_right_wall, bc_top, bc_outlet]
     
@@ -94,7 +97,6 @@ if __name__ == '__main__':
     u0 = 4
     pref = 10
 
-    sol.plot_mesh()
 
     sol_vx, sol_vy, sol_p = sol.solve_steadystate(u0, pref)
     # print(sol_vx)
@@ -102,7 +104,8 @@ if __name__ == '__main__':
     
     # ####################
     # # PLOTTING
-
+    sol.plot_mesh()
+    plt.show()
 
 
     # # Analytical result

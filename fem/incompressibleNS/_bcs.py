@@ -18,7 +18,6 @@ class BCType(Enum):
     """Type of boundary condition"""
     DIRICHLET = auto()    # prescribe values (velocity or pressure)
     NEUMANN = auto()      # prescribe flux/traction (stress)
-    ROBIN = auto()        # mixed (alpha*u + beta*du/dn = g)
 
 class BCVar(Enum):
     """Which variable(s) the BC applies to"""
@@ -117,6 +116,12 @@ class BoundaryCondition:
                 return None
         else:
             return None
+
+@dataclass
+class PressureReferenceNode:
+
+    value: float
+    index: Optional[int] = None
 
 ###############################################
 # EXAMPLES
