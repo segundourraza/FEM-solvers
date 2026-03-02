@@ -262,10 +262,9 @@ class _LegendreElement2D(ABC):
             detJ = np.linalg.det(jac)
             invJ = np.array([[jac[1,1], -jac[1,0]],
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
-            
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates            
             Vh = np.dot(Ve, psi_hat)
-            C_global[con] += np.outer(psi_hat, np.dot(Vh, grad_psi))*detJ*wi
+            C_global[np.ix_(con,con)] += np.outer(psi_hat, np.dot(grad_psi, Vh))*detJ*wi
             
             # C_global[con] += np.outer(psi_hat, ve_x[con]*grad_psi[:,0] + ve_y[con]*grad_psi[:,1])*detJ*wi
 

@@ -8,15 +8,14 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from scipy.sparse import csc_matrix, bmat, csr_matrix
+from scipy.sparse import csc_matrix, bmat, csr_matrix, block_diag
 
 from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode
 
 from .._utils import LinearRectElement, QuadraticRectElement
-from .._utils import (generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity,
-                      group_nodes_by_x)
+from .._utils import (generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
-from .._utils._mesh import EdgesDict, find_corners_fromSegmentsWithElem
+from .._utils._mesh import EdgesDict, find_corners_fromSegmentsWithElem, group_array
 
 
 class IncompNavierStokesSolver2D():
@@ -100,12 +99,12 @@ class IncompNavierStokesSolver2D():
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
         self.__bc_list = bc_list
+        
         corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_list])
-        print(corners)
         if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(0.0, )
+            self.p_ref_node = PressureReferenceNode(0.0, corners[1])
 
-        self.__setup_bcs = False
+        self.__setup_bcs = True
         
 
 
@@ -120,7 +119,8 @@ class IncompNavierStokesSolver2D():
 
         u0 = self.__ss_preprocessing(v0,p0)
         
-        uSol = self._NewtonRaphson(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
+        # uSol = self._NewtonRaphson(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
+        uSol = self._picards_iteration(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
         
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
@@ -155,21 +155,125 @@ class IncompNavierStokesSolver2D():
                 R20[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,1], phi)*detJ*wi
         return R10, R20
 
-    def evaluate_C(self, evaluation_u)->np.ndarray:
+    def evaluate_C(self, u_eval)->np.ndarray:
         C = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         for con in self.__velocity_connectivity:
-            self.velocity_element._C(self.__nodes, con, C, evaluation_u[:self.__N_vel_nodes], evaluation_u[self.__N_vel_nodes:2*self.__N_vel_nodes])
+            self.velocity_element._C(self.__nodes, con, C, u_eval[self.vx_dof(con)], u_eval[self.vy_dof(con)])
         C *= self.rho
         return C
     
 
+
+
     #####################################################################
-    # NON-LINEAR SOLVER
+    # PICARDS ITEARTION NON-LINEAR SOLVER
+
+    def _picards_iteration(self, u_prev, RnJ,
+                           tol = 1e-8, max_iter = 40,
+                           relaxation_parameter = 0,
+                           verbose = True):
+        """
+        Picards iteration
+        """
+        # start from previous solution as initial guess
+        
+        if relaxation_parameter < 0 or relaxation_parameter >=1.0:
+            raise ValueError(f"'relaxation_parameter' must be on range (0, 1), currently equal to {relaxation_parameter}.")
+        
+        update_rule = lambda u, ustar: u*relaxation_parameter + (1-relaxation_parameter)*ustar
+
+        A = bmat([[2*self.S11 + self.S22,   self.S12.T,             - self.R10],
+                  [self.S12,                self.S11 + 2*self.S22,  - self.R20],
+                  [-self.R10.T,             -self.R20.T,            np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], format='csc')
+        
+        b = np.zeros((self.ndof,), dtype= float)
+        for k in range(max_iter):
+            
+            # Collect fixed velocity DOFs from BCs
+            fixed_dict = self.__collect_fixed_velocity_dofs(t=0.0)
+            
+            # Add Neumann traction contributions into R here as needed
+            # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
+
+            # ENFORCE BCs AND SOLVE
+            
+            # combine fixed dict with pressure reference if given
+            if self.p_ref_node is not None:
+                # if self.vx_dof(self.p_ref_node.index) in fixed_dict.keys():
+                #     print("vx_dof '{}'' removed".format(self.vx_dof(self.p_ref_node.index)))
+                #     del fixed_dict[self.vx_dof(self.p_ref_node.index)]
+                # if self.vy_dof(self.p_ref_node.index) in fixed_dict.keys():
+                #     print("vy_dof '{}'' removed".format(self.vy_dof(self.p_ref_node.index)))
+                #     del fixed_dict[self.vy_dof(self.p_ref_node.index)]
+
+                    
+                idx = [_ for _ in fixed_dict.keys() if _ < self.__N_vel_nodes]
+                plt.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'xb', ms = 10)
+                idx = [_%self.__N_vel_nodes for _ in fixed_dict.keys() if _ > self.__N_vel_nodes]
+                plt.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'sb', markerfacecolor = 'none', ms = 10)
+                plt.plot(self.__nodes[self.p_ref_node.index,0], self.__nodes[self.p_ref_node.index,1], '^r', markerfacecolor = 'none', ms = 14)
+                
+                fixed_dict[int(self.p_dof(self.p_ref_node.index))] = float(self.p_ref_node.value)
+
+            if len(fixed_dict) == 0:
+                # No nodes to eliminate, solve full system
+                ustar = spla.spsolve(A, b)
+            else:
+                # Build boolean mask arrays for fixed / free DOFs
+                fixed_idx = np.array(sorted(fixed_dict.keys()), dtype=int)
+                mask = np.ones(self.ndof, dtype=bool)
+                mask[fixed_idx] = False
+                free_idx = np.nonzero(mask)[0].astype(int)
+
+                # Build partitioned system
+                C = self.evaluate_C(u_prev)
+                Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
+                A_full = A + block_diag([C, C, Z], format='csc')
+                A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
+                A_fc = A_full[free_idx][:,fixed_idx]          # sparse shape (#free, #fixed)
+                
+                # compute RHS_f = b - A @ u[fixed dofs]
+                rhs_f = b[free_idx] - A_fc.dot(u_prev[fixed_idx])
+
+                # SOLVE REDUCED SYSTEM
+                lu = spla.splu(A_ff)
+                ustar = u_prev.copy()
+                ustar[free_idx] = lu.solve(rhs_f)
+
+            # update rule
+            u_next = update_rule(u_prev, ustar)
+            
+            # enforce fixed DOFs exactly (remove roundoff)
+            print(u_next[fixed_idx])
+            for dof, pres in fixed_dict.items():
+                u_next[dof] = pres
+            if self.p_ref_node is not None:
+                u_next[self.p_dof(self.p_ref_node.index)] = self.p_ref_node.value
+            print(u_next[fixed_idx])
+            
+            # convergence check (you can check norm of R or norm of delta)
+            du_norm = np.linalg.norm(u_next - u_prev)
+            if verbose:
+                print(f"Iteration {k: >{len(str(max_iter))}}: ||du||={du_norm:.3e}, fixed_dofs={len(fixed_dict)}")
+            if  du_norm < tol:
+                if verbose:
+                    print()
+                break
+            u_prev = u_next
+        else:
+            # if we exit loop not converged:
+            warnings.warn("Picard's Iteration failed to converge after {}".format(max_iter))
+        
+        return u_next
 
 
-    def steadystate_RnJ(self, prev_u, current_u)->Tuple[np.ndarray, csr_matrix]:
-        v1, v2 =  current_u[:self.__N_vel_nodes], current_u[self.__N_vel_nodes:2*self.__N_vel_nodes]
-        p = current_u[-self.__N_pres_nodes:]
+
+    #####################################################################
+    # NEWTON-RAPHSON NON-LINEAR SOLVER
+
+    def steadystate_RnJ(self, u_prev, u_current)->Tuple[np.ndarray, csr_matrix]:
+        v1, v2 =  u_current[:self.__N_vel_nodes], u_current[self.__N_vel_nodes:-self.__N_pres_nodes]
+        p = u_current[-self.__N_pres_nodes:]
 
         # Compute Matrices
         C1v1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
@@ -234,7 +338,7 @@ class IncompNavierStokesSolver2D():
         # combine fixed dict with pressure reference if given
         fixed = dict(fixed_vel_dofs)
         if self.p_ref_node is not None:
-            fixed[int(self.p_ref_node)] = float(p_ref_value)
+            fixed[int(self.p_ref_node.index)] = float(self.p_ref_node.value)
 
         
         if len(fixed) == 0:
@@ -247,20 +351,18 @@ class IncompNavierStokesSolver2D():
         mask = np.ones(self.ndof, dtype=bool)
         mask[fixed_idx] = False
         free_idx = np.nonzero(mask)[0].astype(int)
-        print(fixed_idx)
-        print(free_idx)
-
+        
         # Partition vectors/matrices
         # Δ_c (fixed) = prescribed - current
         delta_c = np.zeros(len(fixed_idx), dtype=float)
         for i, dof in enumerate(fixed_idx):
             delta_c[i] = fixed[dof] - u[dof]
-        print(Jac[free_idx])
+
         # Build J_ff (free x free), J_fc (free x fixed), R_f
         # ensure CSR for slicing
-        J_ff = Jac[free_idx][:, free_idx].tocsc()   # use CSC for solve if needed
-        J_fc = Jac[free_idx][:, fixed_idx]          # sparse shape (#free, #fixed)
-        R_f = Res[free_idx]
+        J_ff = Jac[np.ix_(free_idx, free_idx)].tocsc()   # use CSC for solve if needed
+        J_fc = Jac[np.ix_(free_idx, fixed_idx)]          # sparse shape (#free, #fixed)
+        R_f  = Res[free_idx]
         
         # compute RHS_f = -R_f - J_fc * delta_c
         rhs_f = -R_f - (J_fc.dot(delta_c))
@@ -271,13 +373,6 @@ class IncompNavierStokesSolver2D():
         lu = spla.splu(J_ff)
         delta_f = lu.solve(rhs_f)
 
-        J_cf = Jac[fixed_idx][:, free_idx].tocsc()
-        J_cc = Jac[fixed_idx][:, fixed_idx]          
-        R_c = Res[fixed_idx]
-        rhs_c = -R_c - (J_cc.dot(delta_c))
-        delta_f = spla.lsqr(J_cf, rhs_c)[0]
-
-        
         # Build full delta
         delta = np.zeros(self.ndof, dtype=float)
         delta[free_idx] = delta_f
@@ -285,7 +380,7 @@ class IncompNavierStokesSolver2D():
         return delta
 
     def _NewtonRaphson(self, u_prev, RnJ,
-                       tol = 1e-8, max_iter = 1,
+                       tol = 1e-8, max_iter = 10,
                        line_search = None, relaxation_parameter = 0,
                        verbose = True, run_checks = True):
         """
@@ -295,7 +390,6 @@ class IncompNavierStokesSolver2D():
         """
         # start from previous solution as initial guess
         u = np.copy(u_prev)
-        error = []
         
         if relaxation_parameter < 0 or relaxation_parameter >=1.0:
             raise ValueError(f"'relaxation_parameter' must be on range (0, 1), currently equal to {relaxation_parameter}.")
@@ -324,10 +418,6 @@ class IncompNavierStokesSolver2D():
             # Collect fixed velocity DOFs from BCs
             fixed_vel = self.__collect_fixed_velocity_dofs(t=0.0)
             
-            # map pressure reference to DOF index if provided (p_ref_node is pressure-node index)
-            p_ref_dof = self.p_dof(self.p_ref_node) if self.p_ref_node is not None else None
-
-            
             # Add Neumann traction contributions into R here as needed
             # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
 
@@ -339,7 +429,7 @@ class IncompNavierStokesSolver2D():
             # print("\t", u[list(fixed_vel)])
             # print("\t", u)
             # print("\t", delta)
-            break               
+            # break               
             # update rule
             u = update_rule(u_prev, u, delta, res_norm)
             
@@ -347,7 +437,7 @@ class IncompNavierStokesSolver2D():
             for dof, pres in fixed_vel.items():
                 u[dof] = pres
             if self.p_ref_node is not None:
-                u[p_ref_dof] = 0.0
+                u[self.p_ref_node.index] = self.p_ref_node.value
 
             # convergence check (you can check norm of R or norm of delta)
             res_norm = np.linalg.norm(Res)
@@ -402,7 +492,7 @@ class IncompNavierStokesSolver2D():
             idx = []
             for con in self.__velocity_connectivity:
                 idx.extend(con[:4])
-            ax.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.5)
+            ax.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.25)
         
         if self.velocity_element.n == 9:
             for e, con in enumerate(self.__velocity_connectivity):
@@ -547,6 +637,11 @@ class IncompNavierStokesSolver2D():
     #####################################################################
     # HELPER FUNCTIONS
 
+    def group_by_x(self):
+        return {k:sorted(v,key=lambda p: self.__nodes[p,1]) for k,v in group_array(self.__nodes[:,0]).items()}
+        
+
+
 
     def __collect_fixed_velocity_dofs(self, t: float = 0.0 ) -> Dict[int, float]:
         """
@@ -588,10 +683,6 @@ class IncompNavierStokesSolver2D():
                 if vy_val is not None:
                     fixed[self.vy_dof(node)] = float(vy_val)
         return fixed
-
-
-    def group_nodes_by_x_station(self, tol = 1e-9):
-        return group_nodes_by_x(self.__nodes, self.__velocity_connectivity, order=self.velocity_element.degree, tol=tol)
 
 
 
@@ -702,13 +793,22 @@ class IncompNavierStokesSolver2D():
     
 
     def vx_dof(self, node_idx: int) -> int:
-        return int(node_idx)
+        if isinstance(node_idx, Iterable):
+            return [int(_) for _ in node_idx]
+        else:
+            return int(node_idx)
     
     def vy_dof(self, node_idx: int) -> int:
-        return int(self.__N_vel_nodes + node_idx)
+        if isinstance(node_idx, Iterable):
+            return [int(self.__N_vel_nodes + _) for _ in node_idx]
+        else:
+            return int(self.__N_vel_nodes + node_idx)
     
-    def p_dof(self, pnode_idx: int) -> int:
-        return int(2 * self.__N_vel_nodes + pnode_idx)
+    def p_dof(self, node_idx: int) -> int:
+        if isinstance(node_idx, Iterable):
+            return [int(2*self.__N_vel_nodes + _) for _ in node_idx]
+        else:
+            return int(2 * self.__N_vel_nodes + node_idx)
 
 
 
