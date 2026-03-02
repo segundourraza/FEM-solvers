@@ -8,5 +8,5 @@ from ._elements import (LinearLegendreElement, QuadraticLegendreElement,
 
 from ._quadrature import triangle_quadrature
 
-from ._mesh import (generate_rect_mesh, generate_rectangular_domain, generate_circular_domain,
+from ._mesh import (generate_uniform_rect_mesh, generate_nonuniform_rect_mesh,
                     boundary_edges_connectivity)

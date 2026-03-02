@@ -1,4 +1,5 @@
 import h5py, warnings
+from copy import deepcopy
 from datetime import timezone, datetime
 from pathlib import Path
 from typing import Iterable, Tuple, Callable, List, Dict, Set
@@ -13,20 +14,19 @@ from scipy.sparse import csc_matrix, bmat, csr_matrix, block_diag
 from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode
 
 from .._utils import LinearRectElement, QuadraticRectElement
-from .._utils import (generate_rect_mesh, generate_rectangular_domain, boundary_edges_connectivity)
+from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
 from .._utils._mesh import EdgesDict, find_corners_fromSegmentsWithElem, group_array
 
 
 class IncompNavierStokesSolver2D():
     
-    __setup_physics = False
-    __setup_bcs = False
-
-    p_ref_node = None
-
     def __init__(self, nodes: np.ndarray, connectivity: np.ndarray, boundary_edges:EdgesDict):
         
+        self.__setup_physics = False
+        self.__setup_bcs = False
+        self.p_ref_node = None
+    
         # Nodes and connectivity
         self.__nodes = nodes
         self.__velocity_connectivity = connectivity
@@ -57,28 +57,46 @@ class IncompNavierStokesSolver2D():
     #####################################################################
     # CONSTRUCTORS
     @classmethod
-    def rectangular_domain_tri(cls, height, width, mesh_size = 0.08):
-        """
-        Generate a 2D triangular mesh of a rectangle height x width.
-        """
-        nodes, connectivity = generate_rectangular_domain(height=height, width=width, mesh_size=mesh_size)
-        return cls(nodes=nodes, connectivity=connectivity)
-    
-    @classmethod
-    def rectangular_domain_rect(cls, height, width, nx, ny, order, element = 'complete'):
+    def uniform_rectangular_domain_rect(cls,nx: int,
+                                        ny: int,
+                                        width: float,
+                                        h1: float,
+                                        h2: float = None,
+                                        order: int = 2,
+                                        element: str = 'complete'):
         """
         Generate a 2D rectangular mesh of a rectangle height x width.
-        """
-        nodes, connectivity = generate_rect_mesh(nx, ny, width, height, order=order)
+        """    
+        nodes, connectivity = generate_uniform_rect_mesh(nx=nx, ny=ny, width=width, h1=h1, h2=h2, order=order, element=element)
         boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
         return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
+    @classmethod
+    def rectangular_domain_rect(cls, 
+                                nx: int,
+                                ny: int,
+                                width: float,
+                                h1: float,
+                                h2: float = None,
+                                order: int = 2,
+                                element: str = 'complete',
+                                dx: list = None,
+                                dy: list = None,
+                                origin: Tuple[float,float] = (0.0, 0.0)):
+        """
+        Generate a 2D rectangular mesh of a rectangle height x width.
+        """    
+        nodes, connectivity = generate_nonuniform_rect_mesh(nx=nx, ny=ny, width=width, h1=h1, h2=h2, order=order, element=element,dx=dx,dy=dy,origin=origin)
+        boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
+        
+
     @classmethod
     def duct_domain_rect(cls, h1, h2, width, nx, ny, order,element = 'complete'):
         """
         Generate a 2D duct mesh of a rectangle height x width.
         """
-        nodes, connectivity = generate_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order,element=element)
+        nodes, connectivity = generate_uniform_rect_mesh(nx, ny, width, h1=h1, h2=h2, order=order,element=element)
         boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
         return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
@@ -93,16 +111,19 @@ class IncompNavierStokesSolver2D():
         self.__setup_physics = True
 
     def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_node:PressureReferenceNode = None):
-        for bc in bc_list:
+        self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
+        for bc in self.__bc_dict.values():
             if isinstance(bc, BoundaryCondition):
                 bc.attach_segments_from_edges(edges_dict=self.__edges)
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
-        self.__bc_list = bc_list
         
-        corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_list])
+        corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_dict.values()])
+        ids = np.unique([x for _ in self.__velocity_connectivity for x in _[:4]])
+        self.pressure_nodes = self.__nodes[ids]
+        self.nodes_2_p_dof_map = {ids[i]:i for i in range(self.__N_pres_nodes)}
         if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(0.0, corners[1])
+            self.p_ref_node = PressureReferenceNode(0.0, self.nodes_2_p_dof_map[corners[1]])
 
         self.__setup_bcs = True
         
@@ -187,47 +208,37 @@ class IncompNavierStokesSolver2D():
                   [-self.R10.T,             -self.R20.T,            np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], format='csc')
         
         b = np.zeros((self.ndof,), dtype= float)
+        
+        # Collect fixed velocity DOFs from BCs
+        fixed_dict = self.__collect_fixed_velocity_dofs(t=0.0)
+
+        # Add Neumann traction contributions into R here as needed
+        # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
+
+        # Combine fixed dict with pressure reference if given
+        if self.p_ref_node is not None:
+            fixed_dict[int(self.p_dof(self.p_ref_node.index))] = float(self.p_ref_node.value)
+
+        if len(fixed_dict) == 0:
+            reduce_dim = False
+        else:
+            # Build boolean mask arrays for fixed / free DOFs
+            fixed_idx = np.array(sorted(fixed_dict.keys()), dtype=int)
+            mask = np.ones(self.ndof, dtype=bool)
+            mask[fixed_idx] = False
+            free_idx = np.nonzero(mask)[0].astype(int)
+
+            # Used Later
+            Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
+
+            reduce_dim = True
+
         for k in range(max_iter):
             
-            # Collect fixed velocity DOFs from BCs
-            fixed_dict = self.__collect_fixed_velocity_dofs(t=0.0)
-            
-            # Add Neumann traction contributions into R here as needed
-            # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
-
             # ENFORCE BCs AND SOLVE
-            
-            # combine fixed dict with pressure reference if given
-            if self.p_ref_node is not None:
-                # if self.vx_dof(self.p_ref_node.index) in fixed_dict.keys():
-                #     print("vx_dof '{}'' removed".format(self.vx_dof(self.p_ref_node.index)))
-                #     del fixed_dict[self.vx_dof(self.p_ref_node.index)]
-                # if self.vy_dof(self.p_ref_node.index) in fixed_dict.keys():
-                #     print("vy_dof '{}'' removed".format(self.vy_dof(self.p_ref_node.index)))
-                #     del fixed_dict[self.vy_dof(self.p_ref_node.index)]
-
-                    
-                idx = [_ for _ in fixed_dict.keys() if _ < self.__N_vel_nodes]
-                plt.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'xb', ms = 10)
-                idx = [_%self.__N_vel_nodes for _ in fixed_dict.keys() if _ > self.__N_vel_nodes]
-                plt.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'sb', markerfacecolor = 'none', ms = 10)
-                plt.plot(self.__nodes[self.p_ref_node.index,0], self.__nodes[self.p_ref_node.index,1], '^r', markerfacecolor = 'none', ms = 14)
-                
-                fixed_dict[int(self.p_dof(self.p_ref_node.index))] = float(self.p_ref_node.value)
-
-            if len(fixed_dict) == 0:
-                # No nodes to eliminate, solve full system
-                ustar = spla.spsolve(A, b)
-            else:
-                # Build boolean mask arrays for fixed / free DOFs
-                fixed_idx = np.array(sorted(fixed_dict.keys()), dtype=int)
-                mask = np.ones(self.ndof, dtype=bool)
-                mask[fixed_idx] = False
-                free_idx = np.nonzero(mask)[0].astype(int)
-
+            if reduce_dim:
                 # Build partitioned system
                 C = self.evaluate_C(u_prev)
-                Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
                 A_fc = A_full[free_idx][:,fixed_idx]          # sparse shape (#free, #fixed)
@@ -237,19 +248,21 @@ class IncompNavierStokesSolver2D():
 
                 # SOLVE REDUCED SYSTEM
                 lu = spla.splu(A_ff)
+                temp =  lu.solve(rhs_f)
                 ustar = u_prev.copy()
-                ustar[free_idx] = lu.solve(rhs_f)
+                ustar[free_idx] = temp
+            else:
+                # No nodes to eliminate, solve full system
+                ustar = spla.spsolve(A, b)
 
             # update rule
             u_next = update_rule(u_prev, ustar)
             
             # enforce fixed DOFs exactly (remove roundoff)
-            print(u_next[fixed_idx])
             for dof, pres in fixed_dict.items():
                 u_next[dof] = pres
             if self.p_ref_node is not None:
                 u_next[self.p_dof(self.p_ref_node.index)] = self.p_ref_node.value
-            print(u_next[fixed_idx])
             
             # convergence check (you can check norm of R or norm of delta)
             du_norm = np.linalg.norm(u_next - u_prev)
@@ -651,7 +664,7 @@ class IncompNavierStokesSolver2D():
         Only collects velocity Dirichlet components. Pressure not here.
         """
         fixed = {}
-        for bc in self.__bc_list:
+        for key,bc in self.__bc_dict.items():
             if not getattr(bc, "active", True):
                 continue
             if bc.variable not in (BCVar.VELOCITY, BCVar.BOTH):
@@ -693,9 +706,9 @@ class IncompNavierStokesSolver2D():
         maxid = unique_ids.max()
         map_array = -np.ones(maxid + 1, dtype=int) # -1 for unused indices
         map_array[unique_ids] = np.arange(unique_ids.size, dtype=int)
-
         # produce pressure connectivity (mapped)
         self.__pressure_connectivity = map_array[corners]        # same shape as corners (n_elems, 4)
+        
         self.__N_pres_nodes = int(unique_ids.shape[0])
     
     def __ss_preprocessing(self,v0,p0):

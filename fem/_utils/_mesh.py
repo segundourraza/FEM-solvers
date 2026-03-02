@@ -6,44 +6,7 @@ from typing import Dict, List, Tuple, Optional, Iterable
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
 
-
-def generate_rectangular_domain(height, width, mesh_size = 0.08):
-    poly_pts = [
-            [0.0,   0.0,    0.0],
-            [width, 0.0,    0.0],
-            [width, height, 0.0],
-            [0.0,   height, 0.0]]
-
-    with pygmsh.geo.Geometry() as geom:
-        poly = geom.add_polygon(poly_pts, mesh_size=mesh_size)
-        mesh = geom.generate_mesh()
-    
-    nodes = mesh.points 
-    connectivity = None
-    for cell_block in mesh.cells:
-        if cell_block.type == "triangle":
-            connectivity = cell_block.data
-            break
-    return nodes, connectivity
-        
-def generate_circular_domain(radius, mesh_size = 0.08):
-    with pygmsh.geo.Geometry() as geom:
-            geom.add_circle([0.0, 0.0, 0.0], radius, mesh_size=mesh_size)
-            mesh = geom.generate_mesh()
-
-    nodes = mesh.points[1:, :2]
-
-    # Extract triangle cells
-    connectivity = None
-    for cell_block in mesh.cells:
-        if cell_block.type == "triangle":
-            connectivity = cell_block.data
-            break
-    connectivity -= 1
-    return nodes, connectivity
-
-
-def generate_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='complete'):
+def generate_uniform_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='complete'):
     """
     Generate a rectangular or trapezium quad mesh.
 
@@ -181,6 +144,206 @@ def generate_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='complete'):
         return nodes, np.array(conn, dtype=int)
 
 
+def generate_nonuniform_rect_mesh(nx: int,
+                                  ny: int,
+                                  width: float,
+                                  h1: float,
+                                  h2: float = None,
+                                  order: int = 1,
+                                  element: str = 'complete',
+                                  dx: list = None,
+                                  dy: list = None,
+                                  origin: Tuple[float,float] = (0.0, 0.0)
+                                 ):
+    """
+    Generate a non-uniform rectangular / trapezium quadrilateral mesh while matching
+    the calling convention of generate_uniform_rect_mesh.
+
+    Parameters
+    ----------
+    nx, ny : int
+        Number of elements in x and y directions.
+    width : float
+        Full domain width in x (sum(dx) must equal this or dx will be scaled).
+    h1 : float
+        If h2 is None -> uniform rectangle height.
+        If h2 provided -> left-top height (h_left).
+    h2 : float or None
+        If provided -> right-top height (h_right). If None, rectangle mode.
+    order : int
+        1 or 2
+    element : str
+        For order==2: 'serendipity' (8-node) or 'complete' (9-node).
+    dx : list or None
+        Optional list of `nx` element widths. If None, uniform widths used (width/nx).
+        If provided and sums != width, dx will be scaled to sum to `width`.
+    dy : list or None
+        Optional list of `ny` vertical weights (relative heights). Values must be positive.
+        They are normalized so only relative sizes matter. If None, uniform vertical spacing used.
+    origin : (ox, oy)
+        Lower-left corner coordinates (default (0,0))
+
+    Returns
+    -------
+    nodes : np.ndarray (n_nodes, 2)
+    conn  : np.ndarray (n_elems, nodes_per_elem)
+    """
+    element = element.lower()
+    if order not in (1,2):
+        raise ValueError("Only order 1 and 2 are supported.")
+    if order == 2 and element not in ('serendipity','complete'):
+        raise ValueError("element must be 'serendipity' or 'complete' for order==2")
+    if nx <= 0 or ny <= 0:
+        raise ValueError("nx and ny must be positive integers.")
+    if width <= 0:
+        raise ValueError("width must be positive.")
+
+    ox, oy = origin
+
+    # Determine trapezium / rectangle heights
+    if h2 is None:
+        h_left = h_right = float(h1)
+    else:
+        h_left = float(h1)
+        h_right = float(h2)
+
+    # --- handle dx (x element widths) ---
+    if dx is None:
+        dx_arr = np.full(nx, width / nx, dtype=float)
+    else:
+        if len(dx) != nx:
+            raise ValueError("dx must have length nx")
+        dx_arr = np.asarray(dx, dtype=float)
+        if np.any(dx_arr <= 0):
+            raise ValueError("dx entries must be positive.")
+        s = dx_arr.sum()
+        if s <= 0:
+            raise ValueError("Sum of dx must be positive.")
+        if not np.isclose(s, width):
+            # scale to match width so user doesn't accidentally provide inconsistent sum
+            dx_arr = dx_arr * (width / s)
+
+    # corner x coordinates
+    x_corners = ox + np.concatenate(([0.0], np.cumsum(dx_arr)))
+
+    # --- handle dy (vertical weights -> fractions) ---
+    if dy is None:
+        dy_weights = np.ones(ny, dtype=float)
+    else:
+        if len(dy) != ny:
+            raise ValueError("dy must have length ny")
+        dy_weights = np.asarray(dy, dtype=float)
+        if np.any(dy_weights <= 0):
+            raise ValueError("dy entries must be positive.")
+
+    # normalized cumulative fractions at element corners in y: length ny+1, from 0..1
+    dy_cum = np.concatenate(([0.0], np.cumsum(dy_weights)))
+    total_dy = dy_cum[-1]
+    if total_dy <= 0:
+        raise ValueError("Sum of dy must be positive.")
+    y_fracs = dy_cum / total_dy   # fractions [0, ..., 1]
+
+    # helper to compute top height at given absolute x (linear interpolation)
+    def top_height_at_x(x_abs: float) -> float:
+        # if width == 0 (shouldn't happen), avoid division by zero
+        if width == 0:
+            return h_left
+        t = (x_abs - ox) / width
+        return h_left + (h_right - h_left) * t
+
+    if order == 1:
+        # node grid is (nx+1) by (ny+1) but y depends on x via top_height_at_x
+        nxn = nx + 1
+        nyn = ny + 1
+        nodes = []
+        for j in range(nyn):           # j = 0..ny
+            s = y_fracs[j]             # fraction (0..1) for this horizontal line
+            for i in range(nxn):       # i = 0..nx
+                x = x_corners[i]
+                h_at_x = top_height_at_x(x)
+                y = oy + s * h_at_x
+                nodes.append([x, y])
+        nodes = np.asarray(nodes, dtype=float)
+
+        def idx(i,j):
+            return j * nxn + i
+
+        conn = []
+        for ey in range(ny):
+            by = ey
+            for ex in range(nx):
+                bl = idx(ex, by)
+                br = idx(ex + 1, by)
+                tr = idx(ex + 1, by + 1)
+                tl = idx(ex, by + 1)
+                conn.append([bl, br, tr, tl])
+
+        return nodes, np.asarray(conn, dtype=int)
+
+    else:
+        # order == 2
+        # Build refined x positions: length 2*nx + 1 (even indices = corners, odd = midpoints)
+        nxn = 2*nx + 1
+        x_ref = np.empty(nxn, dtype=float)
+        for k in range(nxn):
+            if k % 2 == 0:  # corner
+                x_ref[k] = x_corners[k//2]
+            else:            # midpoint between corner k//2 and k//2 + 1
+                x_ref[k] = 0.5*(x_corners[(k-1)//2] + x_corners[(k+1)//2])
+
+        # Build refined y fractions (length 2*ny + 1). Even: corner fractions; Odd: midpoint fractions
+        nyn = 2*ny + 1
+        y_ref_frac = np.empty(nyn, dtype=float)
+        for k in range(nyn):
+            if k % 2 == 0:
+                y_ref_frac[k] = y_fracs[k//2]
+            else:
+                low = y_fracs[(k-1)//2]
+                high = y_fracs[(k+1)//2]
+                y_ref_frac[k] = 0.5*(low + high)
+
+        # Build node grid: x_ref (0..2*nx) and y_ref_frac (0..2*ny)
+        nodes = []
+        for j in range(nyn):
+            for i in range(nxn):
+                x = x_ref[i]
+                h_at_x = top_height_at_x(x)
+                y = oy + y_ref_frac[j] * h_at_x
+                nodes.append([x, y])
+        nodes = np.asarray(nodes, dtype=float)
+
+        def idx(i,j):
+            return j * nxn + i
+
+        conn = []
+        for ey in range(ny):
+            by = 2*ey
+            for ex in range(nx):
+                bx = 2*ex
+                # corners
+                n00 = idx(bx + 0, by + 0)  # bottom-left
+                n20 = idx(bx + 2, by + 0)  # bottom-right
+                n22 = idx(bx + 2, by + 2)  # top-right
+                n02 = idx(bx + 0, by + 2)  # top-left
+
+                # midsides
+                n10 = idx(bx + 1, by + 0)  # mid-bottom
+                n21 = idx(bx + 2, by + 1)  # mid-right
+                n12 = idx(bx + 1, by + 2)  # mid-top
+                n01 = idx(bx + 0, by + 1)  # mid-left
+
+                # center
+                n11 = idx(bx + 1, by + 1)
+
+                if element == 'serendipity':
+                    conn.append([n00, n20, n22, n02, n10, n21, n12, n01])
+                else:
+                    conn.append([n00, n20, n22, n02, n10, n21, n12, n01, n11])
+
+        return nodes, np.asarray(conn, dtype=int)
+
+
+
 Segment = Tuple[int, int]
 SegmentWithElem = Tuple[Segment, int]
 EdgesDict = Dict[str, List[SegmentWithElem]]
@@ -308,7 +471,7 @@ if __name__ == "__main__":
     import matplotlib.pyplot as plt
 
     # linear mesh example
-    nodes, conn = generate_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=1)
+    nodes, conn = generate_uniform_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=1)
     plt.figure()
     plt.plot(nodes[:,0], nodes[:,1], '.')
     for e, con in enumerate(conn):
@@ -319,7 +482,7 @@ if __name__ == "__main__":
     print("First element connectivity (4 nodes):", conn[0])
 
     # quadratic serendipity example
-    nodes, conn = generate_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=2, element='serendipity')
+    nodes, conn = generate_uniform_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=2, element='serendipity')
     plt.figure()
     plt.plot(nodes[:,0], nodes[:,1], '.')
     for e, con in enumerate(conn):
@@ -329,7 +492,7 @@ if __name__ == "__main__":
     print("First element connectivity (8 nodes):", conn[0])
 
     # quadratic complete example
-    nodes, conn = generate_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=2, element='complete')
+    nodes, conn = generate_uniform_rect_mesh(nx=3, ny=2, width=3.0, h1=2.0, order=2, element='complete')
     plt.figure()
     plt.plot(nodes[:,0], nodes[:,1], '.')
     for e, con in enumerate(conn):
@@ -339,7 +502,7 @@ if __name__ == "__main__":
     print("First element connectivity (9 nodes):", conn[0])
 
     # trapezium: left top = 1.0, right top = 0.5
-    nodes, conn = generate_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=0.5, order=1)
+    nodes, conn = generate_uniform_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=0.5, order=1)
     print("\nTrapezoidal Domain")
     print("Order 1 (complete): nodes:", len(nodes), "elements:", len(conn))
     print("First element connectivity (9 nodes):", conn[0])
@@ -349,7 +512,7 @@ if __name__ == "__main__":
         plt.plot(nodes[con,0], nodes[con,1], '-')
     
     # second-order serendipity trapezium
-    nodes, conn = generate_rect_mesh(nx=3, ny=2, width=3.0, h1=1.2, h2=0.8, order=2, element='serendipity')
+    nodes, conn = generate_uniform_rect_mesh(nx=3, ny=2, width=3.0, h1=1.2, h2=0.8, order=2, element='serendipity')
     print("\nTrapezoidal Domain")
     print("Order 2 (complete): nodes:", len(nodes), "elements:", len(conn))
     print("First element connectivity (9 nodes):", conn[0])
@@ -361,7 +524,7 @@ if __name__ == "__main__":
     
 
     # generate a 2nd-order rectangular mesh (for example)
-    nodes, conn = generate_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=0.5, order=2)
+    nodes, conn = generate_uniform_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=0.5, order=2)
     edges = boundary_edges_connectivity(conn, nx=4, ny=2, order=2, element='complete')
     plt.figure()
     plt.plot(nodes[:,0], nodes[:,1], '.')
@@ -377,14 +540,24 @@ if __name__ == "__main__":
     print("Top edges (count):", len(edges['top']))
     print("Left edges (count):", len(edges['left']))
 
-
-
-
-    all_map, edge_map = \
-        group_nodes_by_x(nodes, conn, order=2, tol=1e-9)
-    for k,v in all_map.items():
-        plt.plot(nodes[v,0], nodes[v,1], 'o', markerfacecolor = 'none', ms = 10, markeredgewidth = 2)
-    for k,v in edge_map.items():
-        plt.plot(nodes[v,0], nodes[v,1], 's', markerfacecolor = 'none', ms = 15, markeredgewidth = 2)
-
+    # Example 1: nonuniform in x, uniform in y, rectangle
+    dx = [0.5,0.5,1.0,1.0,1.0, 0.5, 0.5, 0.25, 0.25]   # sum = 3.0
+    nodes, conn = generate_nonuniform_rect_mesh(nx=9, ny=2, width=3.0, h1=1.0, h2=None,
+                                                order=2, element='complete', dx=dx, dy=None)
+    plt.figure()
+    plt.plot(nodes[:,0], nodes[:,1], '.')
+    for e, con in enumerate(conn):
+        plt.plot(nodes[con,0], nodes[con,1], '--')
+    
+    
+    # Example 2: uniform x, nonuniform y, trapezium (top left 1.0 top right 2.0)
+    dy = [1.0, 2.0]  # relative heights -> middle row twice as tall as bottom
+    nodes, conn = generate_nonuniform_rect_mesh(nx=4, ny=2, width=2.0, h1=1.0, h2=2.0,
+                                                  order=1, element='complete', dx=None, dy=dy)
+    plt.figure()
+    plt.plot(nodes[:,0], nodes[:,1], '.')
+    for e, con in enumerate(conn):
+        plt.plot(nodes[con,0], nodes[con,1], '--')
+    
+    
     plt.show()

@@ -20,11 +20,12 @@ if __name__ == '__main__':
     # Example 10.8.1
     a = 6
     b = 2
+
     nx = 3
     ny = 5
     
-    nx = 4
-    ny = 6
+    nx = 6
+    ny = 10
     
     # nx = 2
     # ny = 2
@@ -91,22 +92,29 @@ if __name__ == '__main__':
     ######################################################################
     # START SETTING UP SOLVER
     
-    sol = IncompNavierStokesSolver2D.rectangular_domain_rect(b, a,
-                                                      nx, ny,
-                                                      order = order)
-    sol.setup_physics(rho, mu)
-    sol.setup_boundary_conditions(boundary_conditions)
+    uniform = IncompNavierStokesSolver2D.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
+    uniform.setup_physics(rho, mu)
+    uniform.setup_boundary_conditions(boundary_conditions)
+
+    dx = [1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.25, 0.25, 0.25, 0.25]
+    dy = [0.25, 0.25, 0.5, 0.5, 0.25, 0.25]
+    nx = len(dx)
+    ny = len(dy)
+
+    non = IncompNavierStokesSolver2D.rectangular_domain_rect(nx, ny, a, b, order = order, dx = dx, dy=dy)
+    non.setup_physics(rho, mu)
+    non.setup_boundary_conditions(boundary_conditions)
 
     ####################
     # EXECUTE
     u0 = 4
-    pref = 10
+    pref = 0
 
-
-    sol.plot_mesh()
-    sol_vx, sol_vy, sol_p = sol.solve_steadystate(u0, pref)
-    print(sol_vy)
+    uni_vx, uni_vy, uni_p = uniform.solve_steadystate(u0, pref)
     
+    non_vx, non_vy, non_p = non.solve_steadystate(u0, pref)
+
+
     # ####################
     # # PLOTTING
 
@@ -115,24 +123,42 @@ if __name__ == '__main__':
     vy = lambda x,y: -Vw*y/(2*b)*(3 - (y/b)**2)
     p = lambda x,y: 3*mu*Vw/(2*b**3)*(a**2 + y**2 - x**2)
 
-    x_clusters = sol.group_by_x()
+    uni_x_clusters = uniform.group_by_x()
+    non_x_clusters = non.group_by_x()
 
 
-    markers = ['o', 's', '^']
+    markers = ['o', 's', '^', 'd']
     linestyles = ['-.', '-']
     styles = list(product(linestyles, markers))
 
-    fig1, ax1 = plt.subplots(1,2)
+    fig1, ax1 = plt.subplots(1,3)
+    fig1.suptitle("{} x {} Q9".format(nx, ny))
     i = -1
-    for xs,con in list(x_clusters.items())[1::2]:
+    for xs,con in uni_x_clusters.items():
+        if xs not in [2.0, 4.0, 6.0]:
+            continue
         i += 1
-        ys = sol.nodes[con,1]
+        ys = uniform.nodes[con,1]
         ax1[0].plot(vx(xs,ys), ys, label = "Analytical solution at $x_s$ = {:.2f}".format(xs))
         ax1[1].plot(vy(xs,ys), ys, label = "Analytical solution at $x_s$ = {:.2f}".format(xs))
+        ax1[2].plot(p(xs,ys), ys, label = "Analytical solution at $x_s$ = {:.2f}".format(xs))
         ls, m = styles[i]
-        ax1[0].plot(sol_vx[con], sol.nodes[con,1], marker = m, linestyle = ls)
-        ax1[1].plot(sol_vy[con], sol.nodes[con,1], marker = m, linestyle = ls)
+        ax1[0].plot(uni_vx[con], uniform.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[1].plot(uni_vy[con], uniform.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        
+        con = [uniform.nodes_2_p_dof_map[_] for _ in con if _ in uniform.nodes_2_p_dof_map]
+        ax1[2].plot(uni_p[con], uniform.pressure_nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+
+        con = non_x_clusters[xs]
+        ys = non.nodes[con,1]
+        ls, m = styles[i]
+        ax1[0].plot(non_vx[con], non.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, label = 'Non-uniform')
+        ax1[1].plot(non_vy[con], non.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, label = 'Non-uniform')
+        
+        con = [non.nodes_2_p_dof_map[_] for _ in con if _ in non.nodes_2_p_dof_map]
+        ax1[2].plot(non_p[con], non.pressure_nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Non-uniform')
     
+
     ax1[0].set_xlabel('$v_x(x,y)$')
     ax1[1].set_xlabel('$v_y(x,y)$')
     ax1[0].legend()
@@ -141,7 +167,6 @@ if __name__ == '__main__':
         a.grid()
         # a.set_xlim(0)
         # a.set_ylim(0)
-    fig1.tight_layout()
     
 
 
