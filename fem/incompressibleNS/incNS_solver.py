@@ -110,7 +110,7 @@ class IncompNavierStokesSolver2D():
         
         self.__setup_physics = True
 
-    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_node:PressureReferenceNode = None):
+    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_node:PressureReferenceNode = None, pref_value:float = 0.0):
         self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
         for bc in self.__bc_dict.values():
             if isinstance(bc, BoundaryCondition):
@@ -123,7 +123,7 @@ class IncompNavierStokesSolver2D():
         self.pressure_nodes = self.__nodes[ids]
         self.nodes_2_p_dof_map = {ids[i]:i for i in range(self.__N_pres_nodes)}
         if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(0.0, self.nodes_2_p_dof_map[corners[1]])
+            self.p_ref_node = PressureReferenceNode(pref_value, self.nodes_2_p_dof_map[corners[1]])
 
         self.__setup_bcs = True
         
@@ -133,7 +133,7 @@ class IncompNavierStokesSolver2D():
 
     ###############################################################
     # SIMULATION EXECUTION
-    def solve_steadystate(self, v0,p0, nonlinear_solver_options:dict = {}):
+    def solve_steadystate(self, v0, p0, nonlinear_solver_options:dict = {}):
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         self.__nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
@@ -156,9 +156,9 @@ class IncompNavierStokesSolver2D():
             self.velocity_element.Se(self.__nodes, con, S11, S22, S12)
         return (_*self.mu for _ in [S11, S22, S12])
     
-    def __assemble_R_mat(self,r=2):
-        R10 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
-        R20 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
+    def __assemble_Q_mat(self,r=2):
+        Q1 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
+        Q2 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
         for con_v, con_p in zip(self.__velocity_connectivity, self.__pressure_connectivity):
             for (xi,eta), wi in zip(*self.velocity_element.quadrature_points(r)):
                 # VELOCITY FINITE ELEMENT
@@ -172,9 +172,9 @@ class IncompNavierStokesSolver2D():
                 # PRESSURE FINITE ELEMENT
                 phi = self.pressure_element.basis_functions(xi, eta)
 
-                R10[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,0], phi)*detJ*wi
-                R20[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,1], phi)*detJ*wi
-        return R10, R20
+                Q1[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,0], phi)*detJ*wi
+                Q2[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,1], phi)*detJ*wi
+        return Q1, Q2
 
     def evaluate_C(self, u_eval)->np.ndarray:
         C = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
@@ -203,9 +203,9 @@ class IncompNavierStokesSolver2D():
         
         update_rule = lambda u, ustar: u*relaxation_parameter + (1-relaxation_parameter)*ustar
 
-        A = bmat([[2*self.S11 + self.S22,   self.S12.T,             - self.R10],
-                  [self.S12,                self.S11 + 2*self.S22,  - self.R20],
-                  [-self.R10.T,             -self.R20.T,            np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], format='csc')
+        A = bmat([[2*self.S11 + self.S22,   self.S12,               - self.Q1],
+                  [self.S12.T,              self.S11 + 2*self.S22,  - self.Q2],
+                  [-self.Q1.T,              -self.Q2.T,             np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], format='csc')
         
         b = np.zeros((self.ndof,), dtype= float)
         
@@ -309,22 +309,22 @@ class IncompNavierStokesSolver2D():
         
 
         # COMPUTING RESIDUAL VECTOR
-        R1 = C1v1.dot(v1) + C2v2.dot(v1) + 2*self.S11.dot(v1) + self.S22.dot(v1) + self.S12.dot(v2) - self.R10.dot(p) - F1
-        R2 = C1v1.dot(v2) + C2v2.dot(v2) + (self.S12.T).dot(v1) + self.S11.dot(v2) + 2*self.S22.dot(v2) - self.R20.dot(p) - F2
-        R3 = -(self.R10.T).dot(v1) - (self.R20.T).dot(v2)
+        R1 = C1v1.dot(v1) + C2v2.dot(v1) + 2*self.S11.dot(v1) + self.S22.dot(v1) + self.S12.dot(v2) - self.Q1.dot(p) - F1
+        R2 = C1v1.dot(v2) + C2v2.dot(v2) + (self.S12.T).dot(v1) + self.S11.dot(v2) + 2*self.S22.dot(v2) - self.Q2.dot(p) - F2
+        R3 = -(self.Q1.T).dot(v1) - (self.Q2.T).dot(v2)
         
 
         # COMPUTING JACOBIAN
         dR1dv1 = C1v1 + C1_1.dot(v1) + C2v2 + 2*self.S11 + self.S22
         dR1dv2 = C2_1.dot(v1)  + self.S12
-        dR1dp  = -self.R10
+        dR1dp  = -self.Q1
 
         dR2dv1 = C1_1.dot(v2) + self.S12.T
         dR2dv2 = C1v1 + C2v2 + C2_1.dot(v2) + self.S11 + 2*self.S22
-        dR2dp  = -self.R20
+        dR2dp  = -self.Q2
 
-        dR3dv1 = -self.R10.T
-        dR3dv2 = -self.R20.T
+        dR3dv1 = -self.Q1.T
+        dR3dv2 = -self.Q2.T
         
         Tangent = bmat([[dR1dv1, dR1dv2, dR1dp],
                         [dR2dv1, dR2dv2, dR2dp],
@@ -652,6 +652,9 @@ class IncompNavierStokesSolver2D():
 
     def group_by_x(self):
         return {k:sorted(v,key=lambda p: self.__nodes[p,1]) for k,v in group_array(self.__nodes[:,0]).items()}
+    
+    def group_by_y(self):
+        return {k:sorted(v,key=lambda p: self.__nodes[p,0]) for k,v in group_array(self.__nodes[:,1]).items()}
         
 
 
@@ -714,7 +717,7 @@ class IncompNavierStokesSolver2D():
     def __ss_preprocessing(self,v0,p0):
 
         self.S11, self.S22, self.S12 = self._assemble_S_mat()        
-        self.R10, self.R20 = self.__assemble_R_mat()
+        self.Q1, self.Q2 = self.__assemble_Q_mat()
 
         u0 = np.zeros((self.ndof,))
         try:
