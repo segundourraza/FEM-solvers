@@ -119,11 +119,8 @@ class IncompNavierStokesSolver2D():
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
         
         corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_dict.values()])
-        ids = np.unique([x for _ in self.__velocity_connectivity for x in _[:4]])
-        self.pressure_nodes = self.__nodes[ids]
-        self.nodes_2_p_dof_map = {ids[i]:i for i in range(self.__N_pres_nodes)}
         if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(pref_value, self.nodes_2_p_dof_map[corners[1]])
+            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[1]])
 
         self.__setup_bcs = True
         
@@ -141,7 +138,7 @@ class IncompNavierStokesSolver2D():
         u0 = self.__ss_preprocessing(v0,p0)
         
         # uSol = self._NewtonRaphson(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
-        uSol = self._picards_iteration(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
+        uSol = self._picards_iteration(u0, None, **self.__nonlinear_solver_parameters)        
         
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
@@ -192,7 +189,7 @@ class IncompNavierStokesSolver2D():
     def _picards_iteration(self, u_prev, RnJ,
                            tol = 1e-8, max_iter = 40,
                            relaxation_parameter = 0,
-                           verbose = True):
+                           verbose = True)-> np.ndarray:
         """
         Picards iteration
         """
@@ -202,10 +199,11 @@ class IncompNavierStokesSolver2D():
             raise ValueError(f"'relaxation_parameter' must be on range (0, 1), currently equal to {relaxation_parameter}.")
         
         update_rule = lambda u, ustar: u*relaxation_parameter + (1-relaxation_parameter)*ustar
-
-        A = bmat([[2*self.S11 + self.S22,   self.S12,               - self.Q1],
-                  [self.S12.T,              self.S11 + 2*self.S22,  - self.Q2],
-                  [-self.Q1.T,              -self.Q2.T,             np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], format='csc')
+        
+        Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
+        A = bmat([[2*self.S11 + self.S22,   self.S12,               -self.Q1],
+                  [self.S12.T,              self.S11 + 2*self.S22,  -self.Q2],
+                  [-self.Q1.T,              -self.Q2.T,             Z]], format='csc')
         
         b = np.zeros((self.ndof,), dtype= float)
         
@@ -217,7 +215,7 @@ class IncompNavierStokesSolver2D():
 
         # Combine fixed dict with pressure reference if given
         if self.p_ref_node is not None:
-            fixed_dict[int(self.p_dof(self.p_ref_node.index))] = float(self.p_ref_node.value)
+            fixed_dict[int(self.p_dof(self.p_ref_node.index))] = self.p_ref_node.value
 
         if len(fixed_dict) == 0:
             reduce_dim = False
@@ -228,16 +226,13 @@ class IncompNavierStokesSolver2D():
             mask[fixed_idx] = False
             free_idx = np.nonzero(mask)[0].astype(int)
 
-            # Used Later
-            Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
-
             reduce_dim = True
 
         for k in range(max_iter):
             
             # ENFORCE BCs AND SOLVE
             if reduce_dim:
-                # Build partitioned system
+                # Build reduced system
                 C = self.evaluate_C(u_prev)
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
@@ -248,9 +243,9 @@ class IncompNavierStokesSolver2D():
 
                 # SOLVE REDUCED SYSTEM
                 lu = spla.splu(A_ff)
-                temp =  lu.solve(rhs_f)
-                ustar = u_prev.copy()
-                ustar[free_idx] = temp
+                ustar = np.empty((self.ndof))
+                ustar[fixed_idx] = u_prev[fixed_idx]
+                ustar[free_idx] = lu.solve(rhs_f)
             else:
                 # No nodes to eliminate, solve full system
                 ustar = spla.spsolve(A, b)
@@ -709,6 +704,7 @@ class IncompNavierStokesSolver2D():
         maxid = unique_ids.max()
         map_array = -np.ones(maxid + 1, dtype=int) # -1 for unused indices
         map_array[unique_ids] = np.arange(unique_ids.size, dtype=int)
+        self.vel_2_pres_mapping = {int(i):int(map_array[i]) for i in unique_ids}
         # produce pressure connectivity (mapped)
         self.__pressure_connectivity = map_array[corners]        # same shape as corners (n_elems, 4)
         

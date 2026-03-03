@@ -1,3 +1,4 @@
+from scipy.interpolate import griddata
 from itertools import product
 from fem import IncompNavierStokesSolver2D, BoundaryCondition, BCType, BCVar
 
@@ -28,17 +29,19 @@ if __name__ == '__main__':
     order = 2
 
 
-    rho = mu = 1
+    rho = 1
+    mu = 1
+    Vw = 1.0
 
 
     # Analytical result
-    def vx(x,y): return  3*Vw*x/(2*b)*(1 - (y/b)**2)
-    def vy(x,y): return  -Vw*y/(2*b)*(3 - (y/b)**2)
-    def p(x,y):  return  3*mu*Vw/(2*b**3)*(a**2 + y**2 - x**2)
+    def vx(x,y): return 3*Vw*x/(2*b)*(1 - (y/b)**2)
+    def vy(x,y): return -Vw*y/(2*b)*(3 - (y/b)**2)
+    def p(x,y):  return 3*mu*Vw/(2*b**3)*(a**2 + y**2 - x**2)
     
+    print(p(a,0))
     ##############################################################################
     # BCS
-    Vw = 3.0
     bc_top = BoundaryCondition(
             name="moving-top-wall",
             boundary_key="top",
@@ -110,14 +113,12 @@ if __name__ == '__main__':
     uni_vx, uni_vy, uni_p = uni.solve_steadystate(u0, pref)
     
     non_vx, non_vy, non_p = non.solve_steadystate(u0, pref)
-    print(uni_p)
-    print(non_p)
 
-    # ####################
-    # # PLOTTING
-    fig, ax = plt.subplots(1,2)
-    uni.plot_mesh(ax=ax[0])
-    non.plot_mesh(ax=ax[1])
+    ####################
+    # PLOTTING
+    # fig, ax = plt.subplots(1,2)
+    # uni.plot_mesh(ax=ax[0])
+    # non.plot_mesh(ax=ax[1])
 
     
     uni_x_clusters = uni.group_by_x()
@@ -156,6 +157,29 @@ if __name__ == '__main__':
         _a.grid()
         # a.set_xlim(0)
         # a.set_ylim(0)
+
+    #########################################################################
+    # Plot streamlines
+
+    # Node data
+    x = uni.nodes[:, 0]
+    y = uni.nodes[:, 1]
+    u = uni_vx
+    v = uni_vy
+
+    # Create regular grid
+    xi = np.linspace(x.min(), x.max(), 200)
+    yi = np.linspace(y.min(), y.max(), 200)
+    Xi, Yi = np.meshgrid(xi, yi)
+
+    # Interpolate velocities
+    Ui = griddata((x, y), u, (Xi, Yi), method='linear')
+    Vi = griddata((x, y), v, (Xi, Yi), method='linear')
+
+    fig3, ax3 = plt.subplots()
+    # uni.plot_mesh(ax3)
+    ax3.streamplot(Xi, Yi, Ui, Vi, broken_streamlines=False, density = 0.5)
+    ax3.axis('equal')
     
 
 
@@ -171,24 +195,17 @@ if __name__ == '__main__':
         xs = uni.nodes[con,0]
         ax2[i].plot(xs, p(xs, ys), label = "Analytical solution at $y_s$ = {:.2f}".format(ys))
         
-        p_con = [uni.nodes_2_p_dof_map[_] for _ in con if _ in uni.nodes_2_p_dof_map]
-        mod_con = [_ for _ in con if _ in uni.nodes_2_p_dof_map]
-        ax[0].plot(*uni.nodes[mod_con].T, 'xr')
+        p_con = [uni.vel_2_pres_mapping[_] for _ in con if _ in uni.vel_2_pres_mapping]
+        mod_con = [_ for _ in con if _ in uni.vel_2_pres_mapping]
 
         ls, m = styles[i]
         ax2[i].plot(uni.nodes[mod_con,0], uni_p[p_con], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
         
     filtered = {k: v for k, v in non.group_by_y().items() if k in [0.0, 2.0]}
-    for i,(ys,con) in enumerate(filtered.items()):
-        
-        xs = non.nodes[con,0]
+    for i,(ys,con) in enumerate(filtered.items()):        
+        p_con = [non.vel_2_pres_mapping[_] for _ in con if _ in non.vel_2_pres_mapping]
+        mod_con = [_ for _ in con if _ in non.vel_2_pres_mapping]
 
-        print(xs)
-        p_con = [non.nodes_2_p_dof_map[_] for _ in con if _ in non.nodes_2_p_dof_map]
-        mod_con = [_ for _ in con if _ in non.nodes_2_p_dof_map]
-        print(non.nodes[mod_con,0])
-        ax[1].plot(*non.nodes[mod_con].T, 'xr')
-        
         ls, m = styles[i]        
         ax2[i].plot(non.nodes[mod_con,0], non_p[p_con], 'k', marker = m, linestyle = ls, ms = 8, label = 'Non-uniform')
 
