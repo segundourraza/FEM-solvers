@@ -130,7 +130,7 @@ class IncompNavierStokesSolver2D():
 
     ###############################################################
     # SIMULATION EXECUTION
-    def solve_steadystate(self, v0, p0, nonlinear_solver_options:dict = {}):
+    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, nonlinear_solver_options:dict = {}):
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         self.__nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
@@ -138,7 +138,7 @@ class IncompNavierStokesSolver2D():
         u0 = self.__ss_preprocessing(v0,p0)
         
         # uSol = self._NewtonRaphson(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
-        uSol = self._picards_iteration(u0, None, **self.__nonlinear_solver_parameters)        
+        uSol = self._picards_iteration(u0, **self.__nonlinear_solver_parameters)        
         
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
@@ -186,7 +186,7 @@ class IncompNavierStokesSolver2D():
     #####################################################################
     # PICARDS ITEARTION NON-LINEAR SOLVER
 
-    def _picards_iteration(self, u_prev, RnJ,
+    def _picards_iteration(self, u_prev,
                            tol = 1e-8, max_iter = 40,
                            relaxation_parameter = 0,
                            verbose = True)-> np.ndarray:
