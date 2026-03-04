@@ -14,7 +14,7 @@ import numpy as np
 
 np.set_printoptions(linewidth=320)
 import sys
-np.set_printoptions(threshold=sys.maxsize, precision=4)
+np.set_printoptions(threshold=sys.maxsize, precision=7)
 
 if __name__ == '__main__':
     # THE FINITE ELEMENT METHOD IN HEAT TRANSFER AND FLUID DYNAMICS
@@ -25,6 +25,7 @@ if __name__ == '__main__':
     nx = 6
     ny = 3
     
+    nx = ny = 1
     
     order = 2
 
@@ -107,7 +108,7 @@ if __name__ == '__main__':
     
     ####################
     # EXECUTE
-    p0 = 10
+    p0 = 100
             
     u0 = 10
     
