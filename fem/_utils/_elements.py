@@ -235,7 +235,7 @@ class _LegendreElement2D(ABC):
     @abstractmethod
     def compute_ele_properties(self,nodes):...
 
-    def jacobian(self, nodes, xi,eta):
+    def jacobian(self, nodes, xi,eta)->np.ndarray:
         return nodes.T@self.grad_basis_functions(xi, eta)
     
     def detJ(self, nodes, xi, eta):
@@ -266,8 +266,6 @@ class _LegendreElement2D(ABC):
             Vh = np.dot(Ve, psi_hat)
             C_global[np.ix_(con,con)] += np.outer(psi_hat, np.dot(grad_psi, Vh))*detJ*wi
             
-            # C_global[con] += np.outer(psi_hat, ve_x[con]*grad_psi[:,0] + ve_y[con]*grad_psi[:,1])*detJ*wi
-
     def _C1n2(self, nodes, con, C1, C2, ve_x, ve_y):
         Ve = np.vstack([ve_x[con],ve_y[con]])
         for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
@@ -280,8 +278,8 @@ class _LegendreElement2D(ABC):
             grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
             
             Vh = np.dot(Ve, psi_hat)
-            C1[np.ix_(con,con)] += np.outer(psi_hat.T, grad_psi[:,0])*Vh[0]*detJ*wi
-            C2[np.ix_(con,con)] += np.outer(psi_hat.T, grad_psi[:,1])*Vh[1]*detJ*wi
+            C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*Vh[0]*detJ*wi
+            C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*Vh[1]*detJ*wi
     
     def _C1n2_extra(self, nodes, con, C1, C2):
         for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
@@ -292,9 +290,9 @@ class _LegendreElement2D(ABC):
             invJ = np.array([[jac[1,1], -jac[1,0]],
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
             grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
-            
-            C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*detJ*wi
-            C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*detJ*wi
+            psi_hat_dot_1 = np.sum(psi_hat)
+            C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*psi_hat_dot_1*detJ*wi
+            C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*psi_hat_dot_1*detJ*wi
             
 class LinearTriangularElement(_LegendreElement2D):
     

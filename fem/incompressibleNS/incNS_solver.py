@@ -90,7 +90,6 @@ class IncompNavierStokesSolver2D():
         boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
         return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
         
-
     @classmethod
     def duct_domain_rect(cls, h1, h2, width, nx, ny, order,element = 'complete'):
         """
@@ -130,15 +129,15 @@ class IncompNavierStokesSolver2D():
 
     ###############################################################
     # SIMULATION EXECUTION
-    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, nonlinear_solver_options:dict = {}):
+    def solve_steadystate(self, u0 = 0.0, p0 = 0.0, nonlinear_solver_options:dict = {}):
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         self.__nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
 
-        u0 = self.__ss_preprocessing(v0,p0)
+        u0 = self.__ss_preprocessing(u0,p0)
         
-        # uSol = self._NewtonRaphson(u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
-        uSol = self._picards_iteration(u0, **self.__nonlinear_solver_parameters)        
+        uSol = self._NewtonRaphson(0.0, u0, self.steadystate_RnJ, **self.__nonlinear_solver_parameters)        
+        # uSol = self._picards_iteration(0.0, u0, **self.__nonlinear_solver_parameters)        
         
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
@@ -181,12 +180,33 @@ class IncompNavierStokesSolver2D():
         return C
     
 
+    def _dimensionality_reduction(self, t: float = 0.0):
 
+        # Collect fixed velocity DOFs from BCs
+        fixed_dict = self.__collect_fixed_velocity_dofs(t)
+
+        # Add Neumann traction contributions into R here as needed
+        # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
+
+        # Combine fixed dict with pressure reference if given
+        if self.p_ref_node is not None:
+            fixed_dict[int(self.p_dof(self.p_ref_node.index))] = self.p_ref_node.value
+
+        if len(fixed_dict) == 0:
+            return False, None, None, None
+        else:
+            # Build boolean mask arrays for fixed / free DOFs
+            fixed_idx = np.array(sorted(fixed_dict.keys()), dtype=int)
+            mask = np.ones(self.ndof, dtype=bool)
+            mask[fixed_idx] = False
+            free_idx = np.nonzero(mask)[0].astype(int)
+        
+            return True, fixed_dict, fixed_idx, free_idx
 
     #####################################################################
     # PICARDS ITEARTION NON-LINEAR SOLVER
 
-    def _picards_iteration(self, u_prev,
+    def _picards_iteration(self, t_eval, u_prev,
                            tol = 1e-8, max_iter = 40,
                            relaxation_parameter = 0,
                            verbose = True)-> np.ndarray:
@@ -207,27 +227,11 @@ class IncompNavierStokesSolver2D():
         
         b = np.zeros((self.ndof,), dtype= float)
         
-        # Collect fixed velocity DOFs from BCs
-        fixed_dict = self.__collect_fixed_velocity_dofs(t=0.0)
-
-        # Add Neumann traction contributions into R here as needed
-        # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
-
-        # Combine fixed dict with pressure reference if given
-        if self.p_ref_node is not None:
-            fixed_dict[int(self.p_dof(self.p_ref_node.index))] = self.p_ref_node.value
-
-        if len(fixed_dict) == 0:
-            reduce_dim = False
-        else:
-            # Build boolean mask arrays for fixed / free DOFs
-            fixed_idx = np.array(sorted(fixed_dict.keys()), dtype=int)
-            mask = np.ones(self.ndof, dtype=bool)
-            mask[fixed_idx] = False
-            free_idx = np.nonzero(mask)[0].astype(int)
-
-            reduce_dim = True
-
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self._dimensionality_reduction(t_eval)
+        # enforce fixed DOFs exactly on previous solution
+        for dof, pres in fixed_dict.items():
+            u_prev[dof] = pres
+            
         for k in range(max_iter):
             
             # ENFORCE BCs AND SOLVE
@@ -249,15 +253,11 @@ class IncompNavierStokesSolver2D():
             else:
                 # No nodes to eliminate, solve full system
                 ustar = spla.spsolve(A, b)
-
             # update rule
             u_next = update_rule(u_prev, ustar)
             
-            # enforce fixed DOFs exactly (remove roundoff)
-            for dof, pres in fixed_dict.items():
-                u_next[dof] = pres
-            if self.p_ref_node is not None:
-                u_next[self.p_dof(self.p_ref_node.index)] = self.p_ref_node.value
+            if not all(np.isclose(u_next[_], fixed_dict[_]) for _ in fixed_idx):
+                raise RuntimeError()
             
             # convergence check (you can check norm of R or norm of delta)
             du_norm = np.linalg.norm(u_next - u_prev)
@@ -328,66 +328,7 @@ class IncompNavierStokesSolver2D():
         return np.concatenate([R1, R2, R3]), Tangent
 
 
-    def __newton_step_elimination(self, Res:np.ndarray, Jac:csr_matrix, u:np.ndarray, 
-                                  fixed_vel_dofs: Dict[int, float],
-                                  ):
-        """
-        Perform the linear solve J delta = -R eliminating velocity Dirichlet DOFs given in fixed_vel_dofs.
-        Returns delta (full ndof vector). J may be sparse CSR or dense ndarray.
-
-        Parameters
-        ----------
-        J, R, x : full Jacobian (ndof x ndof), residual, and current solution vector
-        fixed_vel_dofs : dict dof -> pres_value  (velocity Dirichlet DOFs)
-        p_ref_dof : optional integer DOF index to fix pressure to p_ref_value (include in fixed set)
-        use_sparse : whether J is a scipy.sparse matrix (CSR). If False, uses dense numpy.
-        solve_linear : optional callable to solve linear system A b -> x. If None, uses spla.spsolve or np.linalg.solve.
-        """
-        # combine fixed dict with pressure reference if given
-        fixed = dict(fixed_vel_dofs)
-        if self.p_ref_node is not None:
-            fixed[int(self.p_ref_node.index)] = float(self.p_ref_node.value)
-
-        
-        if len(fixed) == 0:
-            # No nodes to eliminate, solve full system
-            delta = spla.spsolve(Jac, -Res)
-            return np.asarray(delta, dtype=float)
-        
-        # Build boolean mask arrays for fixed / free DOFs
-        fixed_idx = np.array(sorted(fixed.keys()), dtype=int)
-        mask = np.ones(self.ndof, dtype=bool)
-        mask[fixed_idx] = False
-        free_idx = np.nonzero(mask)[0].astype(int)
-        
-        # Partition vectors/matrices
-        # Δ_c (fixed) = prescribed - current
-        delta_c = np.zeros(len(fixed_idx), dtype=float)
-        for i, dof in enumerate(fixed_idx):
-            delta_c[i] = fixed[dof] - u[dof]
-
-        # Build J_ff (free x free), J_fc (free x fixed), R_f
-        # ensure CSR for slicing
-        J_ff = Jac[np.ix_(free_idx, free_idx)].tocsc()   # use CSC for solve if needed
-        J_fc = Jac[np.ix_(free_idx, fixed_idx)]          # sparse shape (#free, #fixed)
-        R_f  = Res[free_idx]
-        
-        # compute RHS_f = -R_f - J_fc * delta_c
-        rhs_f = -R_f - (J_fc.dot(delta_c))
-
-        # SOLVE REDUCED SYSTEM
-        # use sparse direct solve (CSC works for splu), or use spsolve with CSR works too
-        # convert to CSR for spsolve
-        lu = spla.splu(J_ff)
-        delta_f = lu.solve(rhs_f)
-
-        # Build full delta
-        delta = np.zeros(self.ndof, dtype=float)
-        delta[free_idx] = delta_f
-        delta[fixed_idx] = delta_c
-        return delta
-
-    def _NewtonRaphson(self, u_prev, RnJ,
+    def _NewtonRaphson(self, t_eval, u_prev, RnJ,
                        tol = 1e-8, max_iter = 10,
                        line_search = None, relaxation_parameter = 0,
                        verbose = True, run_checks = True):
@@ -412,6 +353,11 @@ class IncompNavierStokesSolver2D():
         else:
             raise ValueError("Unrecognized 'line_search' algorithim")
         
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self._dimensionality_reduction(t_eval)
+        # enforce fixed DOFs exactly on previous solution
+        for dof, pres in fixed_dict.items():
+            u_prev[dof] = pres
+        
         
         for k in range(max_iter):
             # build residual and jacobian at current iterate
@@ -423,35 +369,48 @@ class IncompNavierStokesSolver2D():
                 j_res= self.fd_jacobian_check(RnJ, u_prev, u)
                 print(f"\t Jacobian relative error = {j_res:.4e}")
 
-            # Collect fixed velocity DOFs from BCs
-            fixed_vel = self.__collect_fixed_velocity_dofs(t=0.0)
-            
-            # Add Neumann traction contributions into R here as needed
-            # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
+            if reduce_dim:
+                # Partition vectors/matrices
+                # Δ_c (fixed) = prescribed - current
+                delta_c = np.zeros(len(fixed_idx), dtype=float)
+                for i, dof in enumerate(fixed_idx):
+                    delta_c[i] = fixed_dict[dof] - u[dof]
 
-            # Solve reduced linear system
-            use_sparse = sp.issparse(Jac)
-            if not use_sparse:
-                raise ValueError
-            delta = self.__newton_step_elimination(Res, Jac, u, fixed_vel)
-            # print("\t", u[list(fixed_vel)])
-            # print("\t", u)
-            # print("\t", delta)
-            # break               
-            # update rule
+                # Build J_ff (free x free), J_fc (free x fixed), R_f
+                # ensure CSR for slicing
+                J_ff = Jac[np.ix_(free_idx, free_idx)].tocsc()   # use CSC for solve if needed
+                J_fc = Jac[np.ix_(free_idx, fixed_idx)]          # sparse shape (#free, #fixed)
+                R_f  = Res[free_idx]
+                
+                # compute RHS_f = -R_f - J_fc * delta_c
+                rhs_f = -R_f - (J_fc.dot(delta_c))
+
+                # SOLVE REDUCED SYSTEM
+                # use sparse direct solve (CSC works for splu), or use spsolve with CSR works too
+                # convert to CSR for spsolve
+                lu = spla.splu(J_ff)
+                delta_f = lu.solve(rhs_f)
+
+                # Build full delta
+                delta = np.zeros(self.ndof, dtype=float)
+                delta[free_idx] = delta_f
+                delta[fixed_idx] = delta_c
+            else:
+                raise ValueError()
+            
             u = update_rule(u_prev, u, delta, res_norm)
             
-            # enforce fixed DOFs exactly (remove roundoff)
-            for dof, pres in fixed_vel.items():
-                u[dof] = pres
-            if self.p_ref_node is not None:
-                u[self.p_ref_node.index] = self.p_ref_node.value
+            if not all(np.isclose(u[_], fixed_dict[_]) for _ in fixed_idx):
+                raise RuntimeError()
+            # # enforce fixed DOFs exactly (remove roundoff)
+            # for dof, pres in fixed_dict.items():
+            #     u[dof] = pres
 
             # convergence check (you can check norm of R or norm of delta)
             res_norm = np.linalg.norm(Res)
             du_norm = np.linalg.norm(delta)
             if verbose:
-                print(f"Newton iter {k}: ||R||={res_norm:.3e}, ||Δ||={du_norm:.3e}, fixed_dofs={len(fixed_vel)}")
+                print(f"Newton iter {k}: ||R||={res_norm:.3e}, ||Δ||={du_norm:.3e}, fixed_dofs={len(fixed_dict)}")
             if res_norm < tol and du_norm < tol:
                 if verbose:
                     print()

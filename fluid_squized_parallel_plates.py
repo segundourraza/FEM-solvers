@@ -107,9 +107,13 @@ if __name__ == '__main__':
     
     ####################
     # EXECUTE
-    uni_vx, uni_vy, uni_p = uni.solve_steadystate()
+    p0 = 10
+            
+    u0 = 10
     
-    non_vx, non_vy, non_p = non.solve_steadystate()
+    uni_vx, uni_vy, uni_p = uni.solve_steadystate(u0=u0, p0=p0)
+    
+    non_vx, non_vy, non_p = non.solve_steadystate(u0=u0, p0=p0)
 
     ####################
     # PLOTTING
