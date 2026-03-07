@@ -438,23 +438,6 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
 
     return edges
 
-def find_corners_fromSegmentsWithElem(edges_list:List[List[SegmentWithElem]]):
-    seen_index = set()
-    vertex_index = set()
-    for edges in edges_list:
-        for id in [0,-1]:
-            index = edges[id][0][id]
-            if index in seen_index:
-                if index in vertex_index:
-                    raise RuntimeError("WTF is this edge connectivity")
-                vertex_index.add(index)
-                seen_index.remove(index)
-            else:
-                seen_index.add(index)
-
-    return list(sorted(vertex_index))
-
-
 def group_array(arr:np.ndarray, tol = 1e-9):
     arr = np.asarray(arr)
     sort_idx = np.argsort(arr)

@@ -7,6 +7,8 @@ from typing import Iterable, Tuple, Callable, List, Dict, Set
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.collections import LineCollection
+ 
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.sparse import csc_matrix, bmat, csr_matrix, block_diag
@@ -16,7 +18,7 @@ from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureRefere
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
-from .._utils._mesh import EdgesDict, find_corners_fromSegmentsWithElem, group_array
+from .._utils._mesh import EdgesDict, group_array
 
 np.random.seed(0)
 class IncompNavierStokesSolver2D():
@@ -109,18 +111,28 @@ class IncompNavierStokesSolver2D():
         
         self.__setup_physics = True
 
-    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_node:PressureReferenceNode = None, pref_value:float = 0.0):
+    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition],pref_corner_id = 1, pref_node:PressureReferenceNode = None, pref_value:float = 0.0):
         self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
         for bc in self.__bc_dict.values():
             if isinstance(bc, BoundaryCondition):
                 bc.attach_segments_from_edges(edges_dict=self.__edges)
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
-        
-        corners = find_corners_fromSegmentsWithElem([_.segments for _ in self.__bc_dict.values()])
-        if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[1]])
 
+        start_dict = {}
+        end_dict = {}
+
+        for k,bc in self.__bc_dict.items():
+            start_dict[bc.segments[0][0][0]] = k
+            end_dict[bc.segments[-1][0][-1]] = k
+        
+        corners = []
+        for k,v in start_dict.items():
+            if k in end_dict and end_dict[k] != v:
+                corners.append(k)
+        
+        if pref_node is None:
+            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[pref_corner_id]])
         self.__setup_bcs = True
         
 
@@ -462,6 +474,8 @@ class IncompNavierStokesSolver2D():
                 idx.extend(con[:4])
             ax.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.25)
         
+
+
         if self.velocity_element.n == 9:
             for e, con in enumerate(self.__velocity_connectivity):
                 temp = np.vstack([self.__nodes[con[:4]],self.__nodes[con[0]]]).T
@@ -470,6 +484,19 @@ class IncompNavierStokesSolver2D():
             for e, con in enumerate(self.__velocity_connectivity):
                 temp = np.vstack([self.__nodes[con],self.__nodes[con[0]]]).T
                 ax.plot(*temp, '-', color = color, linewidth= linewidth)
+
+
+        # for i,(k,bc) in enumerate(self.__bc_dict.items()):
+        #     line_nodes = []
+        #     for edge in bc.segments:
+        #         line_nodes.extend(edge[0])
+        #     print(np.shape(self.__nodes[line_nodes,:]))
+        #     lc = LineCollection(self.__nodes[line_nodes,:].T, colors = plt.rcParams['axes.prop_cycle'].by_key()['color'][i])
+        #     lc.set_linewidth(2)
+        #     ax.add_collection(lc)
+
+        
+
 
     def plot_solution(self, z, ax = None, cmap = 'jet', levels = 100, plot_mesh = False, **kwargs):
         if ax is None:
