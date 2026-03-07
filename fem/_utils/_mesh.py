@@ -349,7 +349,7 @@ SegmentWithElem = Tuple[Segment, int]
 EdgesDict = Dict[str, List[SegmentWithElem]]
 
 def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
-                                 order: int = 1, element: str = 'complete') -> EdgesDict:
+                                 order: int = 2, element: str = 'complete') -> EdgesDict:
     """
     Return linear boundary edge segments with the element id each segment belongs to.
 
@@ -394,8 +394,7 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
             edges['bottom'].append(((n_bl, n_br), elem_id))
         else:
             nmid = int(e[4])   # mid-bottom at index 4 in our ordering
-            edges['bottom'].append(((n_bl, nmid), elem_id))
-            edges['bottom'].append(((nmid, n_br), elem_id))
+            edges['bottom'].append(((n_bl, nmid, n_br), elem_id))
 
     # right: ex=nx-1, ey=0..ny-1, bottom->top
     ex = nx - 1
@@ -407,8 +406,7 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
             edges['right'].append(((n_br, n_tr), elem_id))
         else:
             nmid = int(e[5])   # mid-right at index 5
-            edges['right'].append(((n_br, nmid), elem_id))
-            edges['right'].append(((nmid, n_tr), elem_id))
+            edges['right'].append(((n_br, nmid, n_tr), elem_id))
 
     # top: ey=ny-1, ex=nx-1..0, direction right->left (keep consistent orientation)
     ey = ny - 1
@@ -420,8 +418,7 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
             edges['top'].append(((n_tr, n_tl), elem_id))
         else:
             nmid = int(e[6])   # mid-top at index 6
-            edges['top'].append(((n_tr, nmid), elem_id))
-            edges['top'].append(((nmid, n_tl), elem_id))
+            edges['top'].append(((n_tr, nmid,n_tl), elem_id))
 
     # left: ex=0, ey=ny-1..0, direction top->bottom
     ex = 0
@@ -433,8 +430,7 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
             edges['left'].append(((n_tl, n_bl), elem_id))
         else:
             nmid = int(e[7])   # mid-left at index 7
-            edges['left'].append(((n_tl, nmid), elem_id))
-            edges['left'].append(((nmid, n_bl), elem_id))
+            edges['left'].append(((n_tl, nmid, n_bl), elem_id))
 
     return edges
 
