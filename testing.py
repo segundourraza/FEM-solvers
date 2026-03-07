@@ -101,7 +101,7 @@ if __name__ == '__main__':
     v0 = 10
     up = uni.solve_steadystate(v0=v0, p0=p0)
     
-    reduce_dim, fixed_dict, fixed_idx, free_idx = uni._dimensionality_reduction()
+    reduce_dim, fixed_dict, fixed_idx, free_idx = uni.__enforce_bcs()
 
     R = uni.steadystate_RnJ(0, up)[0]
     plt.semilogy(free_idx, abs(R[free_idx]))

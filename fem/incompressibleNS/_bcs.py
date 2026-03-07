@@ -123,72 +123,74 @@ class PressureReferenceNode:
     value: float
     index: Optional[int] = None
 
-###############################################
-# EXAMPLES
 
-# 1) No-slip wall on left boundary (velocity = (0,0))
-bc_wall_bottom = BoundaryCondition(
-    name="no-slip-left",
-    boundary_key="bottom",
-    bc_type=BCType.DIRICHLET,
-    variable=BCVar.VELOCITY,
-    value=(0.0, 0.0),
-    apply_strong=True,
-    metadata={"description": "No-slip wall"}
-)
+if __name__ == '__main__':
+    ###############################################
+    # EXAMPLES
 
-# 2) Parabolic inlet on bottom boundary (u = Umax * 4*y*(H - y)/H^2, v = 0)
-def parabolic_inlet(x:float, y:float, t:float, Umax=1.0, H=1.0):
-    """Parabolic inlet profile with flow parallel to x-direction
+    # 1) No-slip wall on left boundary (velocity = (0,0))
+    bc_wall_bottom = BoundaryCondition(
+        name="no-slip-left",
+        boundary_key="bottom",
+        bc_type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value=(0.0, 0.0),
+        apply_strong=True,
+        metadata={"description": "No-slip wall"}
+    )
 
-    Parameters
-    ----------
-    x : float
-        x coordinate
-    y : float
-        y coordinate
-    t : float
-        time elapsed
-    Umax : float, optional
-        Maximum velocity of parabolic profile, by default 1.0
-    H : float, optional
-        height of parabolic profile, by default 1.0
+    # 2) Parabolic inlet on bottom boundary (u = Umax * 4*y*(H - y)/H^2, v = 0)
+    def parabolic_inlet(x:float, y:float, t:float, Umax=1.0, H=1.0):
+        """Parabolic inlet profile with flow parallel to x-direction
 
-    Returns
-    -------
-    Tuple
-        Velocity vector
-    """
-    u = Umax * 4.0 * y * (H - y) / (H * H)
-    return np.select([x<0, x<=H, x>H], [(0.0,0.0), (u,0.0), (0.0,0.0)])
+        Parameters
+        ----------
+        x : float
+            x coordinate
+        y : float
+            y coordinate
+        t : float
+            time elapsed
+        Umax : float, optional
+            Maximum velocity of parabolic profile, by default 1.0
+        H : float, optional
+            height of parabolic profile, by default 1.0
 
-bc_inlet = BoundaryCondition(
-    name="inlet-parabolic-velocity",
-    boundary_key="left",
-    bc_type=BCType.DIRICHLET,
-    variable=BCVar.VELOCITY,
-    value=lambda x, y, t: parabolic_inlet(x, y, t, Umax=1.0, H=1.0),
-    metadata={"Umax": 1.0, "profile": "parabolic"}
-)
+        Returns
+        -------
+        Tuple
+            Velocity vector
+        """
+        u = Umax * 4.0 * y * (H - y) / (H * H)
+        return np.select([x<0, x<=H, x>H], [(0.0,0.0), (u,0.0), (0.0,0.0)])
 
-# 3) Stress-free (traction-free) outlet on right boundary (Neumann: traction = (0,0))
-bc_stressfree_outlet = BoundaryCondition(
-    name="outlet-stressfree",
-    boundary_key="right",
-    bc_type=BCType.NEUMANN,
-    variable=BCVar.VELOCITY,
-    traction=lambda x, y, t: (0.0, 0.0),
-    apply_strong=False,
-    metadata={"description": "do-nothing / traction-free outlet"}
-)
+    bc_inlet = BoundaryCondition(
+        name="inlet-parabolic-velocity",
+        boundary_key="left",
+        bc_type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value=lambda x, y, t: parabolic_inlet(x, y, t, Umax=1.0, H=1.0),
+        metadata={"Umax": 1.0, "profile": "parabolic"}
+    )
 
-# 4) Fixed pressure (Dirichlet) 
-bc_pressure_outlet_right = BoundaryCondition(
-    name="outlet-pressure",
-    boundary_key="right",
-    bc_type=BCType.DIRICHLET,
-    variable=BCVar.PRESSURE,
-    value=0.0,
-    apply_strong=True,
-    metadata={"note": "Reference pressure to fix nullspace"}
-)
+    # 3) Stress-free (traction-free) outlet on right boundary (Neumann: traction = (0,0))
+    bc_stressfree_outlet = BoundaryCondition(
+        name="outlet-stressfree",
+        boundary_key="right",
+        bc_type=BCType.NEUMANN,
+        variable=BCVar.VELOCITY,
+        traction=lambda x, y, t: (0.0, 0.0),
+        apply_strong=False,
+        metadata={"description": "do-nothing / traction-free outlet"}
+    )
+
+    # 4) Fixed pressure (Dirichlet) 
+    bc_pressure_outlet_right = BoundaryCondition(
+        name="outlet-pressure",
+        boundary_key="right",
+        bc_type=BCType.DIRICHLET,
+        variable=BCVar.PRESSURE,
+        value=0.0,
+        apply_strong=True,
+        metadata={"note": "Reference pressure to fix nullspace"}
+    )

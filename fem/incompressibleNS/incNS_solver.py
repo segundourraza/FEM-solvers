@@ -13,7 +13,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.sparse import csc_matrix, bmat, csr_matrix, block_diag
 
-from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode
+from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode, SegmentWithElem
 
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
@@ -53,6 +53,64 @@ class IncompNavierStokesSolver2D():
             raise ValueError(f"No compatible element for a {self.__nv} point element.")
         
         self.__edges: EdgesDict = boundary_edges
+
+
+
+    def __build_pressure_mesh(self):
+        corners = self.__velocity_connectivity[:, :4]                    # (n_elems, 4)
+        unique_ids = np.unique(corners)           # sorted unique global node indices
+        # fast mapping old_idx -> new contiguous idx
+        maxid = unique_ids.max()
+        map_array = -np.ones(maxid + 1, dtype=int) # -1 for unused indices
+        map_array[unique_ids] = np.arange(unique_ids.size, dtype=int)
+        self.vel_2_pres_mapping = {int(i):int(map_array[i]) for i in unique_ids}
+        # produce pressure connectivity (mapped)
+        self.__pressure_connectivity = map_array[corners]        # same shape as corners (n_elems, 4)
+        
+        self.__N_pres_nodes = int(unique_ids.shape[0])
+    
+    def __ss_preprocessing(self,v0,p0, u0 = None):
+
+        self.S11, self.S22, self.S12 = self._assemble_S_mat()        
+        self.Q1, self.Q2 = self._assemble_Q_mat()
+        if u0 is None:
+            u0 = np.zeros((self.ndof,))
+            try:
+                u0[:-self.__N_pres_nodes] = float(v0)
+            except:
+
+                raise ValueError("'v0' must be a scalar, currently of type '{}'".format(type(v0)))
+            try:
+                u0[-self.__N_pres_nodes:] = float(p0)
+            except:
+                raise ValueError("'p0' must be a scalar, currently of type '{}'".format(type(p0)))
+            return u0
+        elif isinstance(u0, Iterable) and len(u0) == self.ndof:
+            return u0
+        else:
+            raise RuntimeError()
+            
+
+
+    def __ts_preprocessing(self,):
+
+        # Compute Jacobian
+        self.__detJ = [0]*self.__Nele
+        self.__InvJ = [0]*self.__Nele
+        try: 
+            for e,con in enumerate(self.__velocity_connectivity):
+                self.__detJ[e], self.__InvJ[e] = self.velocity_element.compute_ele_properties(e,self.__nodes[con])
+        
+            # Evaluate 'Mass' and 'Stiffness' matrix. These DO NOT change with time or value of C
+            self.M = self.__assemble_M_constant_jac()
+            self.K = self.__assemble_K_constant_jac()
+
+        except NonConstantJacobian:
+            for e,con in enumerate(self.__velocity_connectivity):
+                pass
+        except Exception as e:
+            raise e
+
 
 
 
@@ -130,7 +188,6 @@ class IncompNavierStokesSolver2D():
         for k,v in start_dict.items():
             if k in end_dict and end_dict[k] != v:
                 corners.append(k)
-        
         if pref_node is None:
             self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[pref_corner_id]])
         self.__setup_bcs = True
@@ -157,6 +214,7 @@ class IncompNavierStokesSolver2D():
         return uSol
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
+
     ####################################################################
     # ASSEMBLE GLOBAL LINEAR SYSTEMS
     
@@ -168,7 +226,7 @@ class IncompNavierStokesSolver2D():
             self.velocity_element.Se(self.__nodes, con, S11, S22, S12)
         return (_*self.mu for _ in [S11, S22, S12])
     
-    def __assemble_Q_mat(self,r=2):
+    def _assemble_Q_mat(self,r=2):
         Q1 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
         Q2 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
         for con_v, con_p in zip(self.__velocity_connectivity, self.__pressure_connectivity):
@@ -188,22 +246,92 @@ class IncompNavierStokesSolver2D():
                 Q2[np.ix_(con_v,con_p)] += np.outer(grad_psi[:,1], phi)*detJ*wi
         return Q1, Q2
 
-    def evaluate_C(self, u_eval)->np.ndarray:
+    def _evaluate_C(self, u_eval)->np.ndarray:
         C = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         for con in self.__velocity_connectivity:
             self.velocity_element._C(self.__nodes, con, C, u_eval[self.vx_dof(con)], u_eval[self.vy_dof(con)])
         C *= self.rho
         return C
     
+    
+    
+    ####################################################################
+    # BOUNDARY CONDITION ENFORCEMENT
+    
+    def __collect_fixed_velocity_dofs(self, t: float = 0.0 ) -> Dict[int, float]:
+        """
+        Build list of fixed DOFs + prescribed values from BCs
+        
+        Returns dict fixed_dofs: dof_index -> prescribed_value
+        Only collects velocity Dirichlet components. Pressure not here.
+        """
+        fixed = {}
+        seen_dofs = {}
+        for key,bc in self.__bc_dict.items():
+            if not getattr(bc, "active", True):
+                continue
+            if bc.variable not in (BCVar.VELOCITY, BCVar.BOTH):
+                continue
 
-    def _dimensionality_reduction(self, t: float = 0.0):
+            # Get list of nodes to where apply BC to
+            # node_list = _extract_nodes_from_segments(bc.segments)
+            node_list = np.unique([i for _ in bc.segments for i in _[0]])
+            
+            if len(node_list) == 0:
+                # No segments attached to the BC
+                continue
+
+            for node in node_list:
+                # evaluate prescribed value at (x,y,t)
+                if callable(bc.value):
+                    vx_val, vy_val = bc.value(*self.__nodes[node,:], t)
+                else:
+                    # expected tuple or None
+                    if bc.value is None:
+                        vx_val, vy_val = (None, None)
+                    else:
+                        if isinstance(bc.value, tuple):
+                            vx_val, vy_val = bc.value
+                        else:
+                            raise ValueError("Velocity Dirichlet value must be tuple (v_x,v_y) or callable")
+                if vx_val is not None:
+                    if self.vx_dof(node) in seen_dofs:
+                        if bc.apply_strong:
+                            fixed[self.vx_dof(node)] = float(vx_val)
+                            seen_dofs[self.vx_dof(node)] = key
+                    else:
+                        fixed[self.vx_dof(node)] = float(vx_val)
+                        seen_dofs[self.vx_dof(node)] = key
+
+                if vy_val is not None:
+                    if self.vy_dof(node) in seen_dofs:
+                        if bc.apply_strong:
+                            fixed[self.vy_dof(node)] = float(vy_val)
+                            seen_dofs[self.vy_dof(node)] = key
+                    else:
+                        fixed[self.vy_dof(node)] = float(vy_val)
+                        seen_dofs[self.vx_dof(node)] = key
+
+        return fixed
+
+    def __apply_neumann(self, t = 0.0):
+        
+        for bc in self.__bc_dict.values():
+            # print(bc.segments)
+            pass
+
+
+
+
+        
+    def __enforce_bcs(self, t: float = 0.0):
 
         # Collect fixed velocity DOFs from BCs
         fixed_dict = self.__collect_fixed_velocity_dofs(t)
 
         # Add Neumann traction contributions into R here as needed
-        # apply_neumann_bcs_to_R(R, x, bc_list, nodes, ux_dof, uy_dof)
-
+        self.__apply_neumann(t)
+        
         # Combine fixed dict with pressure reference if given
         if self.p_ref_node is not None:
             fixed_dict[int(self.p_dof(self.p_ref_node.index))] = self.p_ref_node.value
@@ -242,18 +370,19 @@ class IncompNavierStokesSolver2D():
                   [-self.Q1.T,              -self.Q2.T,             Z]], format='csc')
         
         b = np.zeros((self.ndof,), dtype= float)
-        
-        reduce_dim, fixed_dict, fixed_idx, free_idx = self._dimensionality_reduction(t_eval)
+    
+        # ENFORCE BCs
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self.__enforce_bcs(t_eval)
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
-            u_prev[dof] = pres
+            u_prev[dof] = pres    
             
         for k in range(max_iter):
-            
-            # ENFORCE BCs AND SOLVE
+
+            # SOLVE
             if reduce_dim:
                 # Build reduced system
-                C = self.evaluate_C(u_prev)
+                C = self._evaluate_C(u_prev)
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
                 A_fc = A_full[free_idx][:,fixed_idx]          # sparse shape (#free, #fixed)
@@ -299,13 +428,13 @@ class IncompNavierStokesSolver2D():
         v1, v2 =  u_current[:self.__N_vel_nodes], u_current[self.__N_vel_nodes:-self.__N_pres_nodes]
         p = u_current[-self.__N_pres_nodes:]
 
-        C = self.evaluate_C(u_current)
+        C = self._evaluate_C(u_current)
 
         # Compute Matrices
         C1_1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         C2_1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         for con in self.__velocity_connectivity:
-            self.velocity_element._C1n2_extra(self.__nodes, con, C1_1, C2_1)
+            self.velocity_element._C1n2(self.__nodes, con, C1_1, C2_1)
         C1_1 *= self.rho
         C2_1 *= self.rho
 
@@ -361,7 +490,7 @@ class IncompNavierStokesSolver2D():
         else:
             raise ValueError("Unrecognized 'line_search' algorithim")
         
-        reduce_dim, fixed_dict, fixed_idx, free_idx = self._dimensionality_reduction(t_eval)
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self.__enforce_bcs(t_eval)
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
             u_prev[dof] = pres
@@ -487,14 +616,14 @@ class IncompNavierStokesSolver2D():
                 ax.plot(*temp, '-', color = color, linewidth= linewidth)
 
 
-        # for i,(k,bc) in enumerate(self.__bc_dict.items()):
-        #     line_nodes = []
-        #     for edge in bc.segments:
-        #         line_nodes.extend(edge[0])
-        #     print(np.shape(self.__nodes[line_nodes,:]))
-        #     lc = LineCollection(self.__nodes[line_nodes,:].T, colors = plt.rcParams['axes.prop_cycle'].by_key()['color'][i])
-        #     lc.set_linewidth(2)
-        #     ax.add_collection(lc)
+        for i,(k,bc) in enumerate(self.__bc_dict.items()):
+            line_nodes = []
+            for edge in bc.segments:
+                line_nodes.extend(edge[0])
+            lc = LineCollection([self.__nodes[line_nodes,:]], colors = plt.rcParams['axes.prop_cycle'].by_key()['color'][i])
+            lc.set_linewidth(2.5)
+            lc.set_zorder(1e9)
+            ax.add_collection(lc)
 
         
 
@@ -641,122 +770,6 @@ class IncompNavierStokesSolver2D():
         
 
 
-
-    def __collect_fixed_velocity_dofs(self, t: float = 0.0 ) -> Dict[int, float]:
-        """
-        Build list of fixed DOFs + prescribed values from BCs
-        
-        Returns dict fixed_dofs: dof_index -> prescribed_value
-        Only collects velocity Dirichlet components. Pressure not here.
-        """
-        fixed = {}
-        seen_dofs = {}
-        for key,bc in self.__bc_dict.items():
-            if not getattr(bc, "active", True):
-                continue
-            if bc.variable not in (BCVar.VELOCITY, BCVar.BOTH):
-                continue
-
-            # Get list of nodes to where apply BC to
-            node_list = _extract_nodes_from_segments(bc.segments)
-            
-            if not node_list:
-                # No segments attached to the BC
-                continue
-
-            for node in node_list:
-                # evaluate prescribed value at (x,y,t)
-                if callable(bc.value):
-                    vx_val, vy_val = bc.value(*self.__nodes[node,:], t)
-                else:
-                    # expected tuple or None
-                    if bc.value is None:
-                        vx_val, vy_val = (None, None)
-                    else:
-                        if isinstance(bc.value, tuple):
-                            vx_val, vy_val = bc.value
-                        else:
-                            raise ValueError("Velocity Dirichlet value must be tuple (v_x,v_y) or callable")
-                if vx_val is not None:
-                    if self.vx_dof(node) in seen_dofs:
-                        if bc.apply_strong:
-                            fixed[self.vx_dof(node)] = float(vx_val)
-                            seen_dofs[self.vx_dof(node)] = key
-                    else:
-                        fixed[self.vx_dof(node)] = float(vx_val)
-                        seen_dofs[self.vx_dof(node)] = key
-
-                if vy_val is not None:
-                    if self.vy_dof(node) in seen_dofs:
-                        if bc.apply_strong:
-                            fixed[self.vy_dof(node)] = float(vy_val)
-                            seen_dofs[self.vy_dof(node)] = key
-                    else:
-                        fixed[self.vy_dof(node)] = float(vy_val)
-                        seen_dofs[self.vx_dof(node)] = key
-
-        return fixed
-
-
-
-    def __build_pressure_mesh(self):
-        corners = self.__velocity_connectivity[:, :4]                    # (n_elems, 4)
-        unique_ids = np.unique(corners)           # sorted unique global node indices
-        # fast mapping old_idx -> new contiguous idx
-        maxid = unique_ids.max()
-        map_array = -np.ones(maxid + 1, dtype=int) # -1 for unused indices
-        map_array[unique_ids] = np.arange(unique_ids.size, dtype=int)
-        self.vel_2_pres_mapping = {int(i):int(map_array[i]) for i in unique_ids}
-        # produce pressure connectivity (mapped)
-        self.__pressure_connectivity = map_array[corners]        # same shape as corners (n_elems, 4)
-        
-        self.__N_pres_nodes = int(unique_ids.shape[0])
-    
-    def __ss_preprocessing(self,v0,p0, u0 = None):
-
-        self.S11, self.S22, self.S12 = self._assemble_S_mat()        
-        self.Q1, self.Q2 = self.__assemble_Q_mat()
-        if u0 is None:
-            u0 = np.zeros((self.ndof,))
-            try:
-                u0[:-self.__N_pres_nodes] = float(v0)
-            except:
-
-                raise ValueError("'v0' must be a scalar, currently of type '{}'".format(type(v0)))
-            try:
-                u0[-self.__N_pres_nodes:] = float(p0)
-            except:
-                raise ValueError("'p0' must be a scalar, currently of type '{}'".format(type(p0)))
-            return u0
-        elif isinstance(u0, Iterable) and len(u0) == self.ndof:
-            return u0
-        else:
-            raise RuntimeError()
-            
-
-
-
-    def __ts_preprocessing(self,):
-
-        # Compute Jacobian
-        self.__detJ = [0]*self.__Nele
-        self.__InvJ = [0]*self.__Nele
-        try: 
-            for e,con in enumerate(self.__velocity_connectivity):
-                self.__detJ[e], self.__InvJ[e] = self.velocity_element.compute_ele_properties(e,self.__nodes[con])
-        
-            # Evaluate 'Mass' and 'Stiffness' matrix. These DO NOT change with time or value of C
-            self.M = self.__assemble_M_constant_jac()
-            self.K = self.__assemble_K_constant_jac()
-
-        except NonConstantJacobian:
-            for e,con in enumerate(self.__velocity_connectivity):
-                pass
-        except Exception as e:
-            raise e
-
-
-
     ######################################################
     # PROPERTIES    
     @property
@@ -837,8 +850,7 @@ def _extract_nodes_from_segments(segments:SegmentsList)->Set[int]:
             return []
     nodes = []
     for s in segments:
-        # ((n0,n1), elem_id) case
-        if isinstance(s, tuple) and len(s) == 2 and isinstance(s[0], tuple):
+        if isinstance(s, SegmentWithElem):
             seg = s[0]
             nodes.extend([seg[0], seg[1]])
     return sorted(set(nodes))

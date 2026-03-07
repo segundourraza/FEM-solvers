@@ -92,8 +92,9 @@ if __name__ == '__main__':
     tol = 1e-3
     nonlinear_option = {'tol': tol}
 
-    uSol = sol.solve_steadystate(solver = 'newton',
-                                 nonlinear_solver_options=nonlinear_option)
+    uSol = sol.solve_steadystate(nonlinear_solver_options=nonlinear_option,
+                                #  solver = 'newton',
+                                 )
     vx, vy, p = uSol[:sol.vdof], uSol[sol.vdof:-sol.pdof], uSol[-sol.pdof:]
     
     ####################
@@ -133,17 +134,14 @@ if __name__ == '__main__':
     y = sol.nodes[:, 1]
     u = vx
     v = vy
-    
-    Xi = x.reshape((order*nx+1, order*ny+1))
-    Yi = y.reshape((order*nx+1, order*ny+1))
-    Ui = np.reshape(u,(order*nx+1, order*ny+1))
-    Vi = np.reshape(v,(order*nx+1, order*ny+1))
 
+    mag = np.sqrt(u**2 + v**2)
+    u = [0 if np.isclose(i,j) else i/j for i,j in zip(u,mag)]
+    v = [0 if np.isclose(i,j) else i/j for i,j in zip(v,mag)]
 
     # Create regular grid
-    delta = 0.00
-    xi = np.linspace(x.min()*(1 + delta), x.max()*(1 - delta), 200)
-    yi = np.linspace(y.min()*(1 + delta), y.max()*(1 - delta), 200)
+    xi = np.linspace(x.min(), x.max(), 200)
+    yi = np.linspace(y.min(), y.max(), 200)
     Xi, Yi = np.meshgrid(xi, yi)
 
     # Interpolate velocities
@@ -151,14 +149,18 @@ if __name__ == '__main__':
     Vi = griddata((x, y), v, (Xi, Yi), method='cubic')
 
     fig3, ax3 = plt.subplots()
-    sol.plot_mesh(ax=ax3, plot_nodes=False)    
+    sol.plot_mesh(ax=ax3, plot_nodes=False)
     ax3.streamplot(Xi, Yi, Ui, Vi, 
+                   color = 'b',
+                   linewidth = 0.75,
                    broken_streamlines=False, 
                    density = 0.5,
                    )
     
+    
     ax3.quiver(Xi, Yi, Ui, Vi)
     ax3.axis('equal')
+    ax3.set_xlim(-a*0.05)
 
     fig4, ax4 = plt.subplots()
     sol.plot_mesh(ax=ax4, plot_nodes=False)    

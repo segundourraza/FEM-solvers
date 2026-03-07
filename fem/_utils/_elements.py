@@ -266,25 +266,8 @@ class _LegendreElement2D(ABC):
             
             Vh = np.dot(Ve, psi_hat)
             C_global[np.ix_(con,con)] += np.outer(psi_hat, np.dot(grad_psi, Vh))*detJ*wi
-            
-    def _C1n2(self, nodes:np.ndarray, con:np.ndarray, 
-              C1:np.ndarray, C2:np.ndarray, 
-              ve_x:np.ndarray, ve_y:np.ndarray):
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
-            psi_hat = self.basis_functions(xi, eta)
-            grad_psi_hat = self.grad_basis_functions(xi, eta)
-            jac = self.jacobian(nodes[con], xi, eta)
-            detJ = np.linalg.det(jac)
-            invJ = np.array([[jac[1,1], -jac[1,0]],
-                             [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
 
-            Vhx = np.dot(ve_x[con], psi_hat)
-            Vhy = np.dot(ve_y[con], psi_hat)
-            C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*Vhx*detJ*wi
-            C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*Vhy*detJ*wi
-    
-    def _C1n2_extra(self, nodes:np.ndarray, con:np.ndarray, 
+    def _C1n2(self, nodes:np.ndarray, con:np.ndarray, 
                     C1:np.ndarray, C2:np.ndarray):
         for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
             psi_hat = self.basis_functions(xi, eta)
@@ -298,7 +281,20 @@ class _LegendreElement2D(ABC):
             psi_hat_dot_1 = np.sum(psi_hat)
             C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*psi_hat_dot_1*detJ*wi
             C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*psi_hat_dot_1*detJ*wi
-            
+        
+    def _traction(self, nodes, u, v, p, mu):
+        V = np.vstack((u, v))
+        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
+            psi_hat = self.basis_functions(xi, eta)
+            grad_psi_hat = self.grad_basis_functions(xi, eta)
+            jac = self.jacobian(nodes, xi, eta)
+            detJ = np.linalg.det(jac)
+            invJ = np.array([[jac[1,1], -jac[1,0]],
+                             [-jac[0,1], jac[0,0]]])*(1/detJ)
+            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            grad_v = grad_psi@V
+
+
 class LinearTriangularElement(_LegendreElement2D):
     
     n = 3 # Number of nodes in element
