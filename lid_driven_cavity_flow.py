@@ -28,13 +28,13 @@ if __name__ == '__main__':
     order = 2
 
     rho = 250
+    # rho = 100
 
     mu = 1
     V0 = 1.0
     Pref = 0
 
 
-    # print(p(a,0))
     ##############################################################################
     # BCS
     bc_top = BoundaryCondition(
@@ -53,7 +53,6 @@ if __name__ == '__main__':
             bc_type=BCType.NEUMANN,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
-            apply_strong=True,
             metadata={}
         )
 
@@ -64,7 +63,6 @@ if __name__ == '__main__':
             bc_type=BCType.NEUMANN,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
-            apply_strong=True,
             metadata={}
         )
 
@@ -74,7 +72,6 @@ if __name__ == '__main__':
             bc_type=BCType.NEUMANN,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
-            apply_strong=True,
             metadata={}
         )
 
@@ -82,13 +79,12 @@ if __name__ == '__main__':
     
     boundary_conditions = [bc_bot, bc_left, bc_top, bc_right]
     
-    
     ######################################################################
     # START SETTING UP SOLVER
     
-    uni = IncompNavierStokesSolver2D.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
-    uni.setup_physics(rho, mu)
-    uni.setup_boundary_conditions(boundary_conditions, pref_corner_id=3)
+    sol = IncompNavierStokesSolver2D.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
+    sol.setup_physics(rho, mu)
+    sol.setup_boundary_conditions(boundary_conditions, pref_corner_id=3)
 
     ####################
     # EXECUTE
@@ -96,11 +92,13 @@ if __name__ == '__main__':
     tol = 1e-3
     nonlinear_option = {'tol': tol}
 
-    uSol = uni.solve_steadystate(nonlinear_solver_options=nonlinear_option)
-    vx, vy, p = uSol[:uni.vdof], uSol[uni.vdof:-uni.pdof], uSol[-uni.pdof:]
+    uSol = sol.solve_steadystate(solver = 'newton',
+                                 nonlinear_solver_options=nonlinear_option)
+    vx, vy, p = uSol[:sol.vdof], uSol[sol.vdof:-sol.pdof], uSol[-sol.pdof:]
+    
     ####################
     # PLOTTING
-    uni_x_clusters = uni.group_by_x()
+    x_clusters = sol.group_by_x()
 
     markers = ['o', 's', '^', 'd']
     linestyles = ['-.', '--']
@@ -110,15 +108,13 @@ if __name__ == '__main__':
     # VELOCITY PORFILES
     fig1, ax1 = plt.subplots(1, 2,sharey=True)
     # fig1.suptitle("{} x {} Q9".format(nx, ny))
-    filtered = {k: v for k, v in uni_x_clusters.items() if k in [2.0, 4.0, 6.0]}
+    filtered = {k: v for k, v in x_clusters.items() if np.isclose(k, 0.5)}
     # filtered = {k: v for k, v in uni_x_clusters.items() if k in non_x_clusters.keys()}
     for i,(xs,con) in enumerate(filtered.items()):
-        ys = uni.nodes[con,1]
-        # ax1[0].plot(vx(xs,ys), ys, label = "Analytical solution at $x_s$ = {:.2f}".format(xs))
-        # ax1[1].plot(vy(xs,ys), ys, label = "Analytical solution at $x_s$ = {:.2f}".format(xs))
+        ys = sol.nodes[con,1]
         ls, m = styles[i]
-        ax1[0].plot(vx[con], uni.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
-        ax1[1].plot(vy[con], uni.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[0].plot(vx[con], sol.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[1].plot(vy[con], sol.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
         
     ax1[0].set_xlabel('$v_x(x,y)$')
     ax1[1].set_xlabel('$v_y(x,y)$')
@@ -133,55 +129,61 @@ if __name__ == '__main__':
     # Plot streamlines
 
     # Node data
-    x = uni.nodes[:, 0]
-    y = uni.nodes[:, 1]
+    x = sol.nodes[:, 0]
+    y = sol.nodes[:, 1]
     u = vx
     v = vy
+    
+    Xi = x.reshape((order*nx+1, order*ny+1))
+    Yi = y.reshape((order*nx+1, order*ny+1))
+    Ui = np.reshape(u,(order*nx+1, order*ny+1))
+    Vi = np.reshape(v,(order*nx+1, order*ny+1))
+
 
     # Create regular grid
-    xi = np.linspace(x.min(), x.max(), 200)
-    yi = np.linspace(y.min(), y.max(), 200)
+    delta = 0.00
+    xi = np.linspace(x.min()*(1 + delta), x.max()*(1 - delta), 200)
+    yi = np.linspace(y.min()*(1 + delta), y.max()*(1 - delta), 200)
     Xi, Yi = np.meshgrid(xi, yi)
 
     # Interpolate velocities
-    Ui = griddata((x, y), u, (Xi, Yi), method='linear')
-    Vi = griddata((x, y), v, (Xi, Yi), method='linear')
+    Ui = griddata((x, y), u, (Xi, Yi), method='cubic')
+    Vi = griddata((x, y), v, (Xi, Yi), method='cubic')
 
     fig3, ax3 = plt.subplots()
-    uni.plot_mesh(ax=ax3, plot_nodes=False)
+    sol.plot_mesh(ax=ax3, plot_nodes=False)    
+    ax3.streamplot(Xi, Yi, Ui, Vi, 
+                   broken_streamlines=False, 
+                   density = 0.5,
+                   )
     
-    # uni.plot_mesh(ax3)
-    ax3.streamplot(Xi, Yi, Ui, Vi, broken_streamlines=False, density = 0.5)
+    ax3.quiver(Xi, Yi, Ui, Vi)
     ax3.axis('equal')
-    
 
-
+    fig4, ax4 = plt.subplots()
+    sol.plot_mesh(ax=ax4, plot_nodes=False)    
+    ax4.tricontour(sol.nodes[:,0], sol.nodes[:,1], np.sqrt(vx**2 + vy**2))
     ###########################################################
     # PRESSURE PORFILE
     
 
-    fig2, ax2 = plt.subplots(1,2, sharey=True)
-    filtered = {k: v for k, v in uni.group_by_y().items() if k in [0.0, 2.0]}
+    fig2, ax2 = plt.subplots(1)
+    filtered = {k: v for k, v in sol.group_by_y().items() if k in [0.0, 1.0]}
     for i,(ys,con) in enumerate(filtered.items()):
-        ax2[i].set_title("$y_s = {:.2f}$".format(ys))
-        
-        xs = uni.nodes[con,0]
+        xs = sol.nodes[con,0]
         # ax2[i].plot(xs, p(xs, ys), label = "Analytical solution at $y_s$ = {:.2f}".format(ys))
         
-        p_con = [uni.vel_2_pres_mapping[_] for _ in con if _ in uni.vel_2_pres_mapping]
-        mod_con = [_ for _ in con if _ in uni.vel_2_pres_mapping]
+        p_con = [sol.vel_2_pres_mapping[_] for _ in con if _ in sol.vel_2_pres_mapping]
+        mod_con = [_ for _ in con if _ in sol.vel_2_pres_mapping]
 
         ls, m = styles[i]
-        ax2[i].plot(uni.nodes[mod_con,0], p[p_con], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax2.plot(sol.nodes[mod_con,0], p[p_con], 
+                 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none',
+                 label = "$y_s = {:.2f}$".format(ys))
         
-    ax2[0].set_ylabel('$p(y)$', rotation = 0, labelpad=10)
-    
-    for _a in ax2:
-        _a.grid()
-        _a.set_xlabel('$x$')
-        # a.set_xlim(0)
-        # a.set_ylim(0)
-
+    ax2.set_ylabel('$p(y)$', rotation = 0, labelpad=10)
+    ax2.grid()
+    ax2.set_xlabel('$x$')
 
 
 

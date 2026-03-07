@@ -66,7 +66,7 @@ class BoundaryCondition:
     variable: BCVar = BCVar.VELOCITY
     value: Optional[Union[float, Tuple[Optional[float], Optional[float]], BCFunc]] = None
     traction: Optional[Union[Tuple[Optional[float], Optional[float]], BCFunc]] = None
-    apply_strong: bool = True
+    apply_strong: bool = False
     active: bool = True
     metadata: dict = field(default_factory=dict)
 

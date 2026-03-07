@@ -353,6 +353,7 @@ class IncompNavierStokesSolver2D():
         if isinstance(line_search, str):
             match line_search.lower():
                 case 'armijo':
+                    Residual = lambda u_prev, u: self.steadystate_RnJ(u_prev, u)[0]
                     update_rule = lambda u_prev, u, du, res_norm: self.apply_backtracking(u_prev, u, du, res_norm,Residual, relaxation_parameter=relaxation_parameter)[0]
                 case _: raise ValueError("'line_search' must be on eof {'armijo'}, currently {}".format(line_search))
         elif line_search is None:
@@ -649,6 +650,7 @@ class IncompNavierStokesSolver2D():
         Only collects velocity Dirichlet components. Pressure not here.
         """
         fixed = {}
+        seen_dofs = {}
         for key,bc in self.__bc_dict.items():
             if not getattr(bc, "active", True):
                 continue
@@ -675,11 +677,24 @@ class IncompNavierStokesSolver2D():
                             vx_val, vy_val = bc.value
                         else:
                             raise ValueError("Velocity Dirichlet value must be tuple (v_x,v_y) or callable")
-
                 if vx_val is not None:
-                    fixed[self.vx_dof(node)] = float(vx_val)
+                    if self.vx_dof(node) in seen_dofs:
+                        if bc.apply_strong:
+                            fixed[self.vx_dof(node)] = float(vx_val)
+                            seen_dofs[self.vx_dof(node)] = key
+                    else:
+                        fixed[self.vx_dof(node)] = float(vx_val)
+                        seen_dofs[self.vx_dof(node)] = key
+
                 if vy_val is not None:
-                    fixed[self.vy_dof(node)] = float(vy_val)
+                    if self.vy_dof(node) in seen_dofs:
+                        if bc.apply_strong:
+                            fixed[self.vy_dof(node)] = float(vy_val)
+                            seen_dofs[self.vy_dof(node)] = key
+                    else:
+                        fixed[self.vy_dof(node)] = float(vy_val)
+                        seen_dofs[self.vx_dof(node)] = key
+
         return fixed
 
 
