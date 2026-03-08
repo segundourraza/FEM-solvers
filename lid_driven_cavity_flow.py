@@ -100,7 +100,8 @@ if __name__ == '__main__':
     # EXECUTE
 
     tol = 1e-3
-    nonlinear_option = {'tol': tol}
+    nonlinear_option = {'tol': tol,
+                        "max_iter": 1}
 
     uSol = sol.solve_steadystate(nonlinear_solver_options=nonlinear_option,
                                 #  solver = 'newton',
@@ -109,6 +110,7 @@ if __name__ == '__main__':
     
     ####################
     # PLOTTING
+    
     markers = ['s', '^', 'd', 'o']
     linestyles = ['-.', '--']
     styles = list(product(linestyles, markers))

@@ -20,6 +20,12 @@ from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, g
 from .._utils import _progress_range, tqdm, NonConstantJacobian
 from .._utils._mesh import EdgesDict, group_array
 
+
+class BoundaryConditionSingularityWarning(Warning):
+    def __init__(self, *args):
+        super().__init__(*args)
+
+
 np.random.seed(0)
 class IncompNavierStokesSolver2D():
     
@@ -290,6 +296,7 @@ class IncompNavierStokesSolver2D():
                 if vx_val is not None:
                     if self.vx_dof(node) in seen_dofs:
                         if bc.apply_strong:
+                            warnings.warn("Boundary condition singularity detected for v_x: bc at '{}' and '{}' have same node index '{}'. Value for bc '{}' is applied due to 'strong_apply' flag".format(key, seen_dofs[self.vx_dof(node)], self.vx_dof(node), key), BoundaryConditionSingularityWarning)
                             fixed[self.vx_dof(node)] = float(vx_val)
                             seen_dofs[self.vx_dof(node)] = key
                     else:
@@ -299,6 +306,7 @@ class IncompNavierStokesSolver2D():
                 if vy_val is not None:
                     if self.vy_dof(node) in seen_dofs:
                         if bc.apply_strong:
+                            warnings.warn("Boundary condition singularity detected for v_y: bc at '{}' and '{}' have same node index '{}'. Value for bc '{}' is applied due to 'strong_apply' flag".format(key, seen_dofs[self.vy_dof(node)], self.vy_dof(node), key), BoundaryConditionSingularityWarning)
                             fixed[self.vy_dof(node)] = float(vy_val)
                             seen_dofs[self.vy_dof(node)] = key
                     else:
@@ -309,8 +317,10 @@ class IncompNavierStokesSolver2D():
 
     def __apply_neumann(self, t = 0.0):
         
-        for bc in self.__bc_dict.values():
-            # print(bc.segments)
+        for i,bc in enumerate(self.__bc_dict.values()):
+            print(i)
+            for segment in bc.segments:
+                print('\t', segment)
             pass
 
 
