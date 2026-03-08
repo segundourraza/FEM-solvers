@@ -17,6 +17,16 @@ import sys
 np.set_printoptions(threshold=sys.maxsize, precision=4)
 
 if __name__ == '__main__':
+
+    validation_data = np.genfromtxt(r"validation\cavity_flow_u.csv", delimiter=',')
+    y_coords = validation_data[1:,0]
+    validation_data_u = {k:v for k,v in zip(validation_data[0,1:],validation_data[1:,1:].T)}
+    
+    validation_data = np.genfromtxt(r"validation\cavity_flow_v.csv", delimiter=',')
+    x_coords = validation_data[1:,0]
+    validation_data_v = {k:v for k,v in zip(validation_data[0,1:],validation_data[1:,1:].T)}
+    
+
     # AN INTRODUCTION TO NONLINEAR FINITE ELEMENT ANALYSIS: WITH APPLICATIONS TO HEAT TRANSFER, FLUID MECHANICS, AND SOLID MECHANICS (2ND EDN) -  J. N. REDDY
     # Example 10.8.2
     a = 1
@@ -27,9 +37,9 @@ if __name__ == '__main__':
 
     order = 2
 
-    rho = 250
-    # rho = 100
-
+    rho_list = sorted(validation_data_u.keys())
+    rho = rho_list[1]
+    
     mu = 1
     V0 = 1.0
     Pref = 0
@@ -99,72 +109,38 @@ if __name__ == '__main__':
     
     ####################
     # PLOTTING
-    x_clusters = sol.group_by_x()
-
-    markers = ['o', 's', '^', 'd']
+    markers = ['s', '^', 'd', 'o']
     linestyles = ['-.', '--']
     styles = list(product(linestyles, markers))
 
     ###########################################################
     # VELOCITY PORFILES
-    fig1, ax1 = plt.subplots(1, 2,sharey=True)
-    # fig1.suptitle("{} x {} Q9".format(nx, ny))
-    filtered = {k: v for k, v in x_clusters.items() if np.isclose(k, 0.5)}
-    # filtered = {k: v for k, v in uni_x_clusters.items() if k in non_x_clusters.keys()}
+    fig1, ax1 = plt.subplots(1, 2)
+
+    filtered = {k: v for k, v in sol.group_by_x().items() if np.isclose(k, 0.5)}
     for i,(xs,con) in enumerate(filtered.items()):
         ys = sol.nodes[con,1]
         ls, m = styles[i]
         ax1[0].plot(vx[con], sol.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
-        ax1[1].plot(vy[con], sol.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
-        
+        ax1[0].plot(validation_data_u[rho], y_coords, 'or')
+
+    filtered = {k: v for k, v in sol.group_by_y().items() if np.isclose(k, 0.5)}
+    for i,(ys,con) in enumerate(filtered.items()):
+        ax1[1].plot(vy[con], sol.nodes[con,0], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[1].plot(validation_data_v[rho], x_coords, 'or')
+    
+    ax1[0].set_ylim(0, 1)
     ax1[0].set_xlabel('$v_x(x,y)$')
-    ax1[1].set_xlabel('$v_y(x,y)$')
-    # ax1[0].legend()
     ax1[0].set_ylabel('$y$', rotation = 0, labelpad=10)
+
+    ax1[1].set_ylim(0, 1)
+    ax1[1].set_xlabel('$v_y(x,y)$')
+    ax1[1].set_ylabel('$x$', rotation = 0, labelpad=10)
     for _a in ax1:
         _a.grid()
-        # a.set_xlim(0)
-        # a.set_ylim(0)
+    fig1.tight_layout()
 
-    #########################################################################
-    # Plot streamlines
 
-    # Node data
-    x = sol.nodes[:, 0]
-    y = sol.nodes[:, 1]
-    u = vx
-    v = vy
-
-    mag = np.sqrt(u**2 + v**2)
-    u = [0 if np.isclose(i,j) else i/j for i,j in zip(u,mag)]
-    v = [0 if np.isclose(i,j) else i/j for i,j in zip(v,mag)]
-
-    # Create regular grid
-    xi = np.linspace(x.min(), x.max(), 200)
-    yi = np.linspace(y.min(), y.max(), 200)
-    Xi, Yi = np.meshgrid(xi, yi)
-
-    # Interpolate velocities
-    Ui = griddata((x, y), u, (Xi, Yi), method='cubic')
-    Vi = griddata((x, y), v, (Xi, Yi), method='cubic')
-
-    fig3, ax3 = plt.subplots()
-    sol.plot_mesh(ax=ax3, plot_nodes=False)
-    ax3.streamplot(Xi, Yi, Ui, Vi, 
-                   color = 'b',
-                   linewidth = 0.75,
-                   broken_streamlines=False, 
-                   density = 0.5,
-                   )
-    
-    
-    ax3.quiver(Xi, Yi, Ui, Vi)
-    ax3.axis('equal')
-    ax3.set_xlim(-a*0.05)
-
-    fig4, ax4 = plt.subplots()
-    sol.plot_mesh(ax=ax4, plot_nodes=False)    
-    ax4.tricontour(sol.nodes[:,0], sol.nodes[:,1], np.sqrt(vx**2 + vy**2))
     ###########################################################
     # PRESSURE PORFILE
     
@@ -182,11 +158,43 @@ if __name__ == '__main__':
         ax2.plot(sol.nodes[mod_con,0], p[p_con], 
                  'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none',
                  label = "$y_s = {:.2f}$".format(ys))
-        
     ax2.set_ylabel('$p(y)$', rotation = 0, labelpad=10)
     ax2.grid()
     ax2.set_xlabel('$x$')
 
 
+
+    #########################################################################
+    # Plot streamlines
+
+    # Node data
+    x = sol.nodes[:, 0]
+    y = sol.nodes[:, 1]
+    u = vx
+    v = vy
+
+    mag = np.sqrt(u**2 + v**2)
+    u = [i if np.isclose(i,0.0) else i/j for i,j in zip(u,mag)]
+    v = [i if np.isclose(i,0.0) else i/j for i,j in zip(v,mag)]
+
+    # Create regular grid
+    xi = np.linspace(x.min(), x.max(), 200)
+    yi = np.linspace(y.min(), y.max(), 200)
+    Xi, Yi = np.meshgrid(xi, yi)
+
+    # Interpolate velocities
+    Ui = griddata((x, y), u, (Xi, Yi), method='linear')
+    Vi = griddata((x, y), v, (Xi, Yi), method='linear')
+
+    fig3, ax3 = plt.subplots()
+    sol.plot_mesh(ax=ax3, plot_nodes=False)
+    ax3.streamplot(Xi, Yi, Ui, Vi, 
+                   color = 'b',
+                   linewidth = 0.75,
+                   broken_streamlines=False, 
+                   density = 0.5,
+                   )
+    ax3.quiver(Xi, Yi, Ui, Vi)
+    ax3.axis('equal')
 
     plt.show()

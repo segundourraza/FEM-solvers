@@ -177,19 +177,12 @@ class IncompNavierStokesSolver2D():
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
 
-        start_dict = {}
-        end_dict = {}
+        corners = [bc.segments[-1][0][-1] for bc in self.__bc_dict.values()]
 
-        for k,bc in self.__bc_dict.items():
-            start_dict[bc.segments[0][0][0]] = k
-            end_dict[bc.segments[-1][0][-1]] = k
-        
-        corners = []
-        for k,v in start_dict.items():
-            if k in end_dict and end_dict[k] != v:
-                corners.append(k)
         if pref_node is None:
             self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[pref_corner_id]])
+        
+        
         self.__setup_bcs = True
         
 
@@ -351,7 +344,7 @@ class IncompNavierStokesSolver2D():
     # PICARDS ITERATION NON-LINEAR SOLVER
 
     def _picards_iteration(self, t_eval, u_prev,
-                           tol = 1e-8, max_iter = 40,
+                           tol = 1e-8, max_iter = 100,
                            relaxation_parameter = 0,
                            verbose = True)-> np.ndarray:
         """
