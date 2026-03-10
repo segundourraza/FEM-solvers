@@ -1,6 +1,6 @@
 from scipy.interpolate import griddata
 from itertools import product
-from fem import IncompNavierStokesSolver2D, BoundaryCondition, BCType, BCVar
+from fem import NavierStokesSolver, BoundaryCondition, BCType, BCVar
 
 
 import matplotlib.pyplot as plt
@@ -94,7 +94,7 @@ if __name__ == '__main__':
     ######################################################################
     # START SETTING UP SOLVER
     
-    sol = IncompNavierStokesSolver2D.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions(boundary_conditions, pref_corner_id=3)
 
@@ -125,14 +125,14 @@ if __name__ == '__main__':
 
     filtered = {k: v for k, v in sol.group_by_x().items() if np.isclose(k, 0.5)}
     for i,(xs,con) in enumerate(filtered.items()):
-        ys = sol.nodes[con,1]
+        ys = sol.p2_nodes[con,1]
         ls, m = styles[i]
-        ax1[0].plot(vx[con], sol.nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[0].plot(vx[con], sol.p2_nodes[con,1], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
         ax1[0].plot(validation_data_u[rho], y_coords, 'or')
 
     filtered = {k: v for k, v in sol.group_by_y().items() if np.isclose(k, 0.5)}
     for i,(ys,con) in enumerate(filtered.items()):
-        ax1[1].plot(vy[con], sol.nodes[con,0], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
+        ax1[1].plot(vy[con], sol.p2_nodes[con,0], 'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none', label = 'Uniform')
         ax1[1].plot(validation_data_v[rho], x_coords, 'or')
     
     ax1[0].set_ylim(0, 1)
@@ -160,7 +160,7 @@ if __name__ == '__main__':
         mod_con = [_ for _ in con if _ in sol.vel_2_pres_mapping]
 
         ls, m = styles[i]
-        ax2.plot(sol.nodes[mod_con,0], p[p_con], 
+        ax2.plot(sol.p2_nodes[mod_con,0], p[p_con], 
                  'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none',
                  label = "$y_s = {:.2f}$".format(ys))
     ax2.set_ylabel('$p(x)$', rotation = 0, labelpad=10)
@@ -173,8 +173,8 @@ if __name__ == '__main__':
     # Plot streamlines
 
     # Node data
-    x = sol.nodes[:, 0]
-    y = sol.nodes[:, 1]
+    x = sol.p2_nodes[:, 0]
+    y = sol.p2_nodes[:, 1]
     u = vx
     v = vy
 

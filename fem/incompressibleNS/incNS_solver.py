@@ -27,7 +27,7 @@ class BoundaryConditionSingularityWarning(Warning):
 
 
 np.random.seed(0)
-class IncompNavierStokesSolver2D():
+class NavierStokesSolver():
     
     def __init__(self, nodes: np.ndarray, connectivity: np.ndarray, boundary_edges:EdgesDict):
         
@@ -209,6 +209,7 @@ class IncompNavierStokesSolver2D():
             uSol = self._NewtonRaphson(0.0, u0, self.residual, self.Jacobian, **self.__nonlinear_solver_parameters)        
         else:
             raise ValueError()
+        self.solution = uSol
         return uSol
         return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
@@ -475,17 +476,6 @@ class IncompNavierStokesSolver2D():
             if  du_norm < tol:
                 if verbose:
                     print()
-                    
-                plt.scatter(free_idx, abs(res), marker ='.')
-                plt.gca().set_yscale('log')
-                plt.axvline(self.vdof, color = 'r')
-                plt.axvline(2*self.vdof, color = 'r')
-
-                plt.figure()
-                self.plot_mesh()
-                idx = abs(res > tol)
-                plt.plot(*self.__nodes[free_idx][idx,:].T, 'ro')
-                
                 break
             u_prev = u_next
         else:
@@ -689,11 +679,8 @@ class IncompNavierStokesSolver2D():
             ax = plt.gca()  
         
         if plot_nodes:
-            ax.plot(self.__nodes[:,0], self.__nodes[:,1], '.', color = node_color, ms = node_size)
-            idx = []
-            for con in self.__velocity_connectivity:
-                idx.extend(con[:4])
-            ax.plot(self.__nodes[idx,0], self.__nodes[idx,1], 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.25)
+            ax.plot(*self.p2_nodes.T, '.', color = node_color, ms = node_size)
+            ax.plot(*self.p1_nodes.T, 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.25)
         
 
 
@@ -858,8 +845,9 @@ class IncompNavierStokesSolver2D():
     
     def group_by_y(self):
         return {k:sorted(v,key=lambda p: self.__nodes[p,0]) for k,v in group_array(self.__nodes[:,1]).items()}
-        
-
+    
+    def get_solution(self):
+        return self.solution[:self.vdof], self.solution[self.vdof:-self.pdof], self.solution[-self.pdof:]
 
     ######################################################
     # PROPERTIES    
@@ -889,9 +877,15 @@ class IncompNavierStokesSolver2D():
         return self.__u
     
     @property
-    def nodes(self):
+    def p2_nodes(self):
         """Nodes"""
         return self.__nodes
+
+    @property
+    def p1_nodes(self):
+        """Nodes"""
+        return self.__nodes[list(self.vel_2_pres_mapping.keys()),:]
+        
         
     @property
     def connectivity(self):

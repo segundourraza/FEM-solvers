@@ -1,3 +1,3 @@
-from .incNS_solver import IncompNavierStokesSolver2D
+from .incNS_solver import NavierStokesSolver
 
 from ._bcs import BoundaryCondition, BCType, BCVar
