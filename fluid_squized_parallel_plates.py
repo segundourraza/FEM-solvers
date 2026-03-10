@@ -25,7 +25,7 @@ if __name__ == '__main__':
     nx = 6
     ny = 3
     
-    nx = ny = 1
+    nx = ny = 4
     
     order = 2
 
@@ -57,7 +57,6 @@ if __name__ == '__main__':
             name="outlet-stressfree",
             boundary_key="right",
             bc_type=BCType.NEUMANN,
-            variable=BCVar.VELOCITY,
             traction=lambda x, y, t: (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free outlet"}
@@ -112,9 +111,11 @@ if __name__ == '__main__':
             
     u0 = 10
     
-    uni_vx, uni_vy, uni_p = uni.solve_steadystate(u0=u0, p0=p0)
-    
-    non_vx, non_vy, non_p = non.solve_steadystate(u0=u0, p0=p0)
+    uni_sol = uni.solve_steadystate(u0=u0, p0=p0)
+    uni_vx, uni_vy, uni_p = uni_sol[:uni.vdof], uni_sol[uni.vdof:-uni.pdof], uni_sol[-uni.pdof:]
+
+    non_sol = non.solve_steadystate(u0=u0, p0=p0)
+    non_vx, non_vy, non_p = non_sol[:non.vdof], non_sol[non.vdof:-non.pdof], non_sol[-non.pdof:]
 
     ####################
     # PLOTTING

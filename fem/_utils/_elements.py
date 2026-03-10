@@ -6,19 +6,23 @@ from ._utils import NonConstantJacobian
 
 ############################################################################
 # BASIS FUNCTIONS
-linear_basis_functions = [lambda xi: 0.5*(1-xi),
-                          lambda xi: 0.5*(1+xi)]
+def linear_basis_functions(xi):
+    return np.array([0.5*(1-xi),
+                     0.5*(1+xi)])
 
-linear_grad_basis_functions = [lambda xi: -0.5,
-                               lambda xi: 0.5]
+def linear_grad_basis_functions(xi):
+    return np.array([-0.5,
+                     0.5])
 
-quad_basis_function = [lambda x: -0.5*x*(1-x), 
-                       lambda x: 1 - x*x, 
-                       lambda x: 0.5*x*(1+x)]
+def quad_basis_function(xi):
+    return np.array([-0.5*xi*(1-xi), 
+                     1 - xi*xi, 
+                     0.5*xi*(1+xi)])
 
-quad_grad_basis_function = [lambda x: -0.5*(1-2*x), 
-                            lambda x: -2*x, 
-                            lambda x: 0.5*(1+2*x)]
+def quad_grad_basis_function(xi):
+    return np.array([-0.5*(1-2*xi), 
+                     -2*xi, 
+                     0.5*(1+2*xi)])
 
 
 
@@ -154,11 +158,11 @@ class LinearLegendreElement(_LegendreElement):
 
     @staticmethod
     def basis_functions(xi):
-        return np.array([_(xi) for _ in linear_basis_functions])
+        return linear_basis_functions(xi)
     
     @staticmethod
     def grad_basis_functions(xi):
-        return np.array([_(xi) for _ in linear_grad_basis_functions])
+        return linear_grad_basis_functions(xi)
     
 
     ##################################################
@@ -187,12 +191,11 @@ class QuadraticLegendreElement(_LegendreElement):
 
     @staticmethod
     def basis_functions(xi):
-        return np.array([_(xi) for _ in quad_basis_function])
+        return quad_basis_function(xi)
     
     @staticmethod
     def grad_basis_functions(xi):
-        return np.array([_(xi) for _ in quad_grad_basis_function])
-    
+        return quad_grad_basis_function(xi)
 
     ##################################################
     # FINITE ELEMENT DISCRETIZATION
@@ -218,6 +221,16 @@ class _LegendreElement2D(ABC):
     r_viscous = None
     r_convective = None
 
+    @staticmethod
+    @abstractmethod
+    def edge_basis_function(xi)->np.ndarray: ...
+    
+    @staticmethod
+    @abstractmethod
+    def edge_grad_basis_function(xi)->np.ndarray: ...
+
+    @abstractmethod
+    def edge_properties(self,xi:float,edge_nodes)->np.ndarray: ...
 
 
     @staticmethod
@@ -234,7 +247,7 @@ class _LegendreElement2D(ABC):
     
     @abstractmethod
     def compute_ele_properties(self,nodes):...
-
+    
     def jacobian(self, nodes, xi,eta)->np.ndarray:
         return nodes.T@self.grad_basis_functions(xi, eta)
     
@@ -282,19 +295,6 @@ class _LegendreElement2D(ABC):
             C1[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,0])*psi_hat_dot_1*detJ*wi
             C2[np.ix_(con,con)] += np.outer(psi_hat, grad_psi[:,1])*psi_hat_dot_1*detJ*wi
         
-    def _traction(self, nodes, u, v, p, mu):
-        V = np.vstack((u, v))
-        for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
-            psi_hat = self.basis_functions(xi, eta)
-            grad_psi_hat = self.grad_basis_functions(xi, eta)
-            jac = self.jacobian(nodes, xi, eta)
-            detJ = np.linalg.det(jac)
-            invJ = np.array([[jac[1,1], -jac[1,0]],
-                             [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
-            grad_v = grad_psi@V
-
-
 class LinearTriangularElement(_LegendreElement2D):
     
     n = 3 # Number of nodes in element
@@ -323,6 +323,7 @@ class LinearTriangularElement(_LegendreElement2D):
                         [0, 0, 0],
                         [-1, 0, 1]], dtype=float)
     
+
     @staticmethod
     def quadrature_points(n_points):
         return triangle_quadrature(n_points)
@@ -361,7 +362,18 @@ class LinearRectElement(_LegendreElement2D):
     # Quadrature points
     r_viscous: int = 2
     r_convective: int = 2
-   
+
+    @staticmethod
+    def edge_basis_function(xi):
+        return linear_basis_functions(xi)
+    
+    @staticmethod
+    def edge_grad_basis_function(xi):
+        return linear_grad_basis_functions(xi)
+    
+    def edge_properties(self, xi, nodes):
+        raise NotImplementedError()
+    
     @staticmethod
     def basis_functions(xi, eta):
         return 0.25*np.array([(1 - xi)*(1-eta),
@@ -402,6 +414,32 @@ class QuadraticRectElement(_LegendreElement2D):
     r_convective: int = 4
 
     @staticmethod
+    def edge_basis_function(xi):
+        return quad_basis_function(xi)
+    
+    @staticmethod
+    def edge_grad_basis_function(xi):
+        return quad_grad_basis_function(xi)
+
+    def edge_properties(self, xi, nodes):
+        
+        psi      = self.edge_basis_function(xi)
+        psi_grad = self.edge_grad_basis_function(xi)
+        
+        coords = psi @ nodes
+        t = psi_grad @ nodes # tangent vector
+
+        detJ = np.linalg.norm(t)
+        t_unit = t / detJ
+
+        n = np.array([t_unit[1], -t_unit[0]])
+
+        return coords, n, detJ
+
+
+
+
+    @staticmethod
     def basis_functions(xi, eta):
         return np.array([0.25*(xi**2 - xi)*(eta**2 - eta),
                          0.25*(xi**2 + xi)*(eta**2 - eta),
@@ -435,6 +473,10 @@ class QuadraticRectElement(_LegendreElement2D):
         return np.vstack([X.ravel(), Y.ravel()]).T, np.outer(w,w).ravel()
     
 
+    @staticmethod
+    def edge_quadrature_points(n_points):
+        return np.polynomial.legendre.leggauss(n_points)
+    
 
     def compute_ele_properties(self,e, nodes):
         J = nodes[:,:2].T@self.grad_basis_functions(-1,-1)

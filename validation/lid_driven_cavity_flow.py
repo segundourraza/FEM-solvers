@@ -34,11 +34,13 @@ if __name__ == '__main__':
 
     
     nx = ny = 14
-
+    # nx = ny = 1
+    
+    
     order = 2
 
     rho_list = sorted(validation_data_u.keys())
-    rho = rho_list[1]
+    rho = rho_list[0]
     
     mu = 1
     V0 = 1.0
@@ -60,7 +62,7 @@ if __name__ == '__main__':
     bc_right = BoundaryCondition(
             name="no-slip",
             boundary_key="right",
-            bc_type=BCType.NEUMANN,
+            bc_type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
@@ -70,7 +72,7 @@ if __name__ == '__main__':
     bc_bot = BoundaryCondition(
             name="no-slip",
             boundary_key="bottom",
-            bc_type=BCType.NEUMANN,
+            bc_type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
@@ -79,7 +81,7 @@ if __name__ == '__main__':
     bc_left = BoundaryCondition(
             name="no-slip",
             boundary_key="left",
-            bc_type=BCType.NEUMANN,
+            bc_type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
@@ -101,16 +103,18 @@ if __name__ == '__main__':
 
     tol = 1e-3
     nonlinear_option = {'tol': tol,
-                        "max_iter": 1}
-
-    uSol = sol.solve_steadystate(nonlinear_solver_options=nonlinear_option,
+                        # "max_iter": 1
+                        }
+    v0 = -0.1
+    uSol = sol.solve_steadystate(v0=v0,
+                                 nonlinear_solver_options=nonlinear_option,
                                 #  solver = 'newton',
                                  )
     vx, vy, p = uSol[:sol.vdof], uSol[sol.vdof:-sol.pdof], uSol[-sol.pdof:]
     
     ####################
     # PLOTTING
-    
+
     markers = ['s', '^', 'd', 'o']
     linestyles = ['-.', '--']
     styles = list(product(linestyles, markers))
@@ -148,9 +152,8 @@ if __name__ == '__main__':
     
 
     fig2, ax2 = plt.subplots(1)
-    filtered = {k: v for k, v in sol.group_by_y().items() if k in [0.0, 1.0]}
+    filtered = {k: v for k, v in sol.group_by_y().items() if k in [1.0]}
     for i,(ys,con) in enumerate(filtered.items()):
-        xs = sol.nodes[con,0]
         # ax2[i].plot(xs, p(xs, ys), label = "Analytical solution at $y_s$ = {:.2f}".format(ys))
         
         p_con = [sol.vel_2_pres_mapping[_] for _ in con if _ in sol.vel_2_pres_mapping]
@@ -160,9 +163,9 @@ if __name__ == '__main__':
         ax2.plot(sol.nodes[mod_con,0], p[p_con], 
                  'k', marker = m, linestyle = ls, ms = 8, markerfacecolor = 'none',
                  label = "$y_s = {:.2f}$".format(ys))
-    ax2.set_ylabel('$p(y)$', rotation = 0, labelpad=10)
-    ax2.grid()
+    ax2.set_ylabel('$p(x)$', rotation = 0, labelpad=10)
     ax2.set_xlabel('$x$')
+    ax2.grid()
 
 
 
