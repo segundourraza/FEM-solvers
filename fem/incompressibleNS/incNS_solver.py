@@ -259,11 +259,12 @@ class NavierStokesSolver():
                 self._evaluate_traction(F, segment[0], u)
         return F
     
-    def _evaluate_traction(self, F:np.ndarray, con:Iterable, u:np.ndarray, t_function:Callable = None, t: float = None):
-        v_nodes = np.column_stack([self.vx_dof(con), u[self.vy_dof(con)]])
+    def _evaluate_traction(self, F:np.ndarray, con:Iterable[int], u:np.ndarray, bc:BoundaryCondition = None, t: float = None):
+        v_nodes = np.column_stack([u[self.vx_dof(con)], u[self.vy_dof(con)]])
         p_nodes = u[[self.p_dof(self.vel_2_pres_mapping[_])  for _ in con if _ in self.vel_2_pres_mapping]]
 
-        flag = True if t_function is None else False
+        flag = True if bc is None else False
+        
         for xi, wi in zip(*self.velocity_element.edge_quadrature_points(self.velocity_element.r_convective)):
             # VELOCITY FINITE ELEMENT
             psi = self.velocity_element.edge_basis_function(xi)
@@ -288,19 +289,21 @@ class NavierStokesSolver():
                 sigma = tau - p*np.eye(2)
                 t = sigma @ n
             else:
-                if t is None:
+                if bc.traction is None:
                     raise ValueError
                 else:
-                    if callable(t):
+                    if callable(bc.traction):
                         coords = psi @ self.__nodes[con,:]
-                        t = t_function(*coords, t)
-                    elif isinstance(t, tuple):
-                        t = t_function
+                        t = bc.traction(*coords, t)
+                    elif isinstance(bc.traction, tuple):
+                        t = list(bc.traction)
             
             test = np.outer(psi, t)*detJ*wi
             F[self.vx_dof(con)] += test[:,0]
             F[self.vy_dof(con)] += test[:,1]
 
+
+    
     ####################################################################
     # BOUNDARY CONDITION ENFORCEMENT
     
@@ -363,25 +366,14 @@ class NavierStokesSolver():
 
         return fixed
 
-    def __apply_neumann(self,u:np.ndarray, t:float = 0.0):
+    def __apply_neumann(self, u:np.ndarray, t:float = 0.0):
         
         F = np.zeros((self.ndof,), dtype= float)
-        return F
+        # return F
         for i,bc in enumerate(self.__bc_dict.values()):
             if bc.bc_type == BCType.NEUMANN and bc.active:
-                if bc.traction is None:
-                    t_function = None
-                elif callable(bc.traction):
-                    t_function = bc.traction
-                elif isinstance(bc.traction, Tuple):
-                    t_function = lambda x,y,t: bc.traction
-                else: 
-                    raise RuntimeError()
-            else:
-                t_function = None
-
-            for segment in bc.segments:
-                self._evaluate_traction(F, segment[0], u, t_function=t_function, t=t)
+                for segment in bc.segments:
+                    self._evaluate_traction(F, segment[0], u, bc=bc, t=t)
         return F
     
 
@@ -431,6 +423,7 @@ class NavierStokesSolver():
     
         # ENFORCE BCs
         reduce_dim, fixed_dict, fixed_idx, free_idx = self.__apply_dirichlet(t_eval)
+
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
             u_prev[dof] = pres    
@@ -459,6 +452,7 @@ class NavierStokesSolver():
             else:
                 # No nodes to eliminate, solve full system
                 ustar = spla.spsolve(A, b)
+            
             # update rule
             u_next = update_rule(u_prev, ustar)
             

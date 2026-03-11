@@ -1,7 +1,5 @@
 import unittest
 import numpy as np
-from itertools import product
-
 from fem import NavierStokesSolver, BoundaryCondition, BCType, BCVar
 
 
@@ -42,7 +40,7 @@ class TestCouetteFlow(unittest.TestCase):
             boundary_key="top",
             bc_type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
-            value=lambda x, y, t: (cls.Vw, 0),
+            value= (cls.Vw, 0),
             apply_strong=True,
             metadata={"Vx": cls.Vw, "Vy": 0},
         )
@@ -59,7 +57,7 @@ class TestCouetteFlow(unittest.TestCase):
             name="outlet-stressfree",
             boundary_key="right",
             bc_type=BCType.NEUMANN,
-            traction=lambda x, y, t: (0.0, 0.0),
+            traction= (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free outlet"},
         )
@@ -67,7 +65,7 @@ class TestCouetteFlow(unittest.TestCase):
             name="inlet-stressfree",
             boundary_key="left",
             bc_type=BCType.NEUMANN,
-            traction=lambda x, y, t: (0.0, 0.0),
+            traction= (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free inlet"},
         )
