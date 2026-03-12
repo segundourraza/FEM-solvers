@@ -177,16 +177,26 @@ class NavierStokesSolver():
 
     def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_corner_id = 1, pref_node:PressureReferenceNode = None, pref_value:float = 0.0):
         self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
+        require_pref = True
         for bc in self.__bc_dict.values():
             if isinstance(bc, BoundaryCondition):
                 bc.attach_segments_from_edges(edges_dict=self.__edges)
             else:
                 raise TypeError("All elements of 'bc_list' must be of type {}".format(BoundaryCondition))
-        
-        corners = [self.__bc_dict[keys].segments[0][0][0] for keys in ['bottom', 'right', 'top', 'left']]
 
-        if pref_node is None:
-            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[corners[pref_corner_id]])
+            # Pressure specificied boundary is actually a Neumann BC
+            if bc.variable == BCVar.PRESSURE:
+                require_pref = False
+                if bc.type == BCType.DIRICHLET:
+                    bc.type = BCType.NEUMANN
+
+            
+
+        
+        self.corner_nodes = [self.__bc_dict[keys].segments[0][0][0] for keys in ['bottom', 'right', 'top', 'left']]
+
+        if require_pref and pref_node is None:
+            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[self.corner_nodes[pref_corner_id]])
         
         self.__setup_bcs = True
         
@@ -289,15 +299,15 @@ class NavierStokesSolver():
                 sigma = tau - p*np.eye(2)
                 t = sigma @ n
             else:
-                if bc.traction is None:
-                    raise ValueError
+                if callable(bc.value):
+                    coords = psi @ self.__nodes[con,:]
+                    t = bc.value(*coords, t)
+                elif isinstance(bc.value, tuple):
+                    t = list(bc.value)
+                elif bc.variable == BCVar.PRESSURE and isinstance(bc.value,(float, int)):
+                    t = - bc.value*n
                 else:
-                    if callable(bc.traction):
-                        coords = psi @ self.__nodes[con,:]
-                        t = bc.traction(*coords, t)
-                    elif isinstance(bc.traction, tuple):
-                        t = list(bc.traction)
-            
+                    raise ValueError            
             test = np.outer(psi, t)*detJ*wi
             F[self.vx_dof(con)] += test[:,0]
             F[self.vy_dof(con)] += test[:,1]
@@ -317,9 +327,9 @@ class NavierStokesSolver():
         fixed = {}
         seen_dofs = {}
         for key,bc in self.__bc_dict.items():
-            if not getattr(bc, "active", True):
+            if not bc.active:
                 continue
-            if bc.variable not in (BCVar.VELOCITY, BCVar.BOTH):
+            if bc.variable != BCVar.VELOCITY:
                 continue
 
             # Get list of nodes to where apply BC to
@@ -369,9 +379,8 @@ class NavierStokesSolver():
     def __apply_neumann(self, u:np.ndarray, t:float = 0.0):
         
         F = np.zeros((self.ndof,), dtype= float)
-        # return F
         for i,bc in enumerate(self.__bc_dict.values()):
-            if bc.bc_type == BCType.NEUMANN and bc.active:
+            if bc.type == BCType.NEUMANN and bc.active:
                 for segment in bc.segments:
                     self._evaluate_traction(F, segment[0], u, bc=bc, t=t)
         return F

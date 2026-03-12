@@ -46,7 +46,7 @@ if __name__ == '__main__':
     bc_top = BoundaryCondition(
             name="moving-top-wall",
             boundary_key="top",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value=lambda x, y, t: (0, -Vw),
             apply_strong=True,
@@ -56,7 +56,7 @@ if __name__ == '__main__':
     bc_outlet = BoundaryCondition(
             name="outlet-stressfree",
             boundary_key="right",
-            bc_type=BCType.NEUMANN,
+            type=BCType.NEUMANN,
             traction=lambda x, y, t: (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free outlet"}
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     bc_bot_wall = BoundaryCondition(
             name="bottom-wall-symmetry",
             boundary_key="bottom",
-            bc_type=BCType.NEUMANN,
+            type=BCType.NEUMANN,
             variable=BCVar.VELOCITY,
             value=(None, 0.0),
             traction=(0.0, None),
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     bc_left_wall = BoundaryCondition(
             name="left-wall-symmetry",
             boundary_key="left",
-            bc_type=BCType.NEUMANN,
+            type=BCType.NEUMANN,
             variable=BCVar.VELOCITY,
             value=(0.0, None),
             traction=(None, 0.0),

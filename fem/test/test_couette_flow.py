@@ -38,7 +38,7 @@ class TestCouetteFlow(unittest.TestCase):
         top = BoundaryCondition(
             name="moving-top-wall",
             boundary_key="top",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value= (cls.Vw, 0),
             apply_strong=True,
@@ -47,7 +47,7 @@ class TestCouetteFlow(unittest.TestCase):
         bottom = BoundaryCondition(
             name="no-slip",
             boundary_key="bottom",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value=(0.0, 0.0),
             apply_strong=True,
@@ -56,16 +56,18 @@ class TestCouetteFlow(unittest.TestCase):
         outlet = BoundaryCondition(
             name="outlet-stressfree",
             boundary_key="right",
-            bc_type=BCType.NEUMANN,
-            traction= (0.0, 0.0),
+            type=BCType.NEUMANN,
+            variable=BCVar.TRACTION,
+            value = (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free outlet"},
         )
         inlet = BoundaryCondition(
             name="inlet-stressfree",
             boundary_key="left",
-            bc_type=BCType.NEUMANN,
-            traction= (0.0, 0.0),
+            type=BCType.NEUMANN,
+            variable=BCVar.TRACTION,
+            value = (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free inlet"},
         )

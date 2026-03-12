@@ -23,7 +23,7 @@ class BCVar(Enum):
     """Which variable(s) the BC applies to"""
     VELOCITY = auto()     # (u, v)
     PRESSURE = auto()     # p
-    BOTH = auto()         # both
+    TRACTION = auto()
 
 @dataclass
 class BoundaryCondition:
@@ -49,9 +49,6 @@ class BoundaryCondition:
     value : Optional[Union[float, Tuple[float, float], BCFunc]]
         The prescribed value. For VELOCITY: provide (u,v) or function(x,y,t)->(u,v).
         For PRESSURE: provide scalar or function(x,y,t)->p.
-    traction : Optional[BCFunc]
-        If bc_type==NEUMANN and variable==VELOCITY, this function should return the traction
-        (t_x, t_y) at (x,y,t). If None and NEUMANN specified, solver may compute natural BC.
     apply_strong : bool
         If True apply BC strongly (dirichlet enforced directly); otherwise planned for weak/penalty.
     active : bool
@@ -62,24 +59,13 @@ class BoundaryCondition:
     name: str
     boundary_key: str
     segments: Optional[SegmentsList] = None
-    bc_type: BCType = BCType.DIRICHLET
+    type: BCType = BCType.DIRICHLET
     variable: BCVar = BCVar.VELOCITY
     value: Optional[Union[float, Tuple[Optional[float], Optional[float]], BCFunc]] = None
-    traction: Optional[Union[Tuple[Optional[float], Optional[float]], BCFunc]] = None
     apply_strong: bool = False
     active: bool = True
     metadata: dict = field(default_factory=dict)
-
-    def is_dirichlet_velocity(self) -> bool:
-        return self.bc_type == BCType.DIRICHLET and self.variable in (BCVar.VELOCITY, BCVar.BOTH)
-
-    def is_dirichlet_pressure(self) -> bool:
-        return self.bc_type == BCType.DIRICHLET and self.variable in (BCVar.PRESSURE, BCVar.BOTH)
-
-    def is_neumann(self) -> bool:
-        return self.bc_type == BCType.NEUMANN
-    
-    
+        
     def attach_segments_from_edges(self, edges_dict: dict):
         """
         If you computed `edges = boundary_edges_with_elements(...)`,
@@ -104,18 +90,10 @@ class BoundaryCondition:
         if not self.active:
             return None
 
-        if self.bc_type == BCType.DIRICHLET:
-            if callable(self.value):
-                return self.value(x, y, t)
-            else:
-                return self.value
-        elif self.bc_type == BCType.NEUMANN:
-            if self.traction is not None:
-                return self.traction(x, y, t)
-            else:
-                return None
+        if callable(self.value):
+            return self.value(x, y, t)
         else:
-            return None
+            return self.value
 
 @dataclass
 class PressureReferenceNode:
@@ -132,7 +110,7 @@ if __name__ == '__main__':
     bc_wall_bottom = BoundaryCondition(
         name="no-slip-left",
         boundary_key="bottom",
-        bc_type=BCType.DIRICHLET,
+        type=BCType.DIRICHLET,
         variable=BCVar.VELOCITY,
         value=(0.0, 0.0),
         apply_strong=True,
@@ -167,7 +145,7 @@ if __name__ == '__main__':
     bc_inlet = BoundaryCondition(
         name="inlet-parabolic-velocity",
         boundary_key="left",
-        bc_type=BCType.DIRICHLET,
+        type=BCType.DIRICHLET,
         variable=BCVar.VELOCITY,
         value=lambda x, y, t: parabolic_inlet(x, y, t, Umax=1.0, H=1.0),
         metadata={"Umax": 1.0, "profile": "parabolic"}
@@ -177,7 +155,7 @@ if __name__ == '__main__':
     bc_stressfree_outlet = BoundaryCondition(
         name="outlet-stressfree",
         boundary_key="right",
-        bc_type=BCType.NEUMANN,
+        type=BCType.NEUMANN,
         variable=BCVar.VELOCITY,
         traction=lambda x, y, t: (0.0, 0.0),
         apply_strong=False,
@@ -188,7 +166,7 @@ if __name__ == '__main__':
     bc_pressure_outlet_right = BoundaryCondition(
         name="outlet-pressure",
         boundary_key="right",
-        bc_type=BCType.DIRICHLET,
+        type=BCType.DIRICHLET,
         variable=BCVar.PRESSURE,
         value=0.0,
         apply_strong=True,

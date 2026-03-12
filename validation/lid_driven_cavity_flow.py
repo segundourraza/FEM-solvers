@@ -52,7 +52,7 @@ if __name__ == '__main__':
     bc_top = BoundaryCondition(
             name="moving-fluid",
             boundary_key="top",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value=lambda x, y, t: (V0, 0.0),
             apply_strong=True,
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     bc_right = BoundaryCondition(
             name="no-slip",
             boundary_key="right",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
@@ -72,7 +72,7 @@ if __name__ == '__main__':
     bc_bot = BoundaryCondition(
             name="no-slip",
             boundary_key="bottom",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
@@ -81,7 +81,7 @@ if __name__ == '__main__':
     bc_left = BoundaryCondition(
             name="no-slip",
             boundary_key="left",
-            bc_type=BCType.DIRICHLET,
+            type=BCType.DIRICHLET,
             variable=BCVar.VELOCITY,
             value = lambda x, y, t: (0.0, 0.0),
             metadata={}
