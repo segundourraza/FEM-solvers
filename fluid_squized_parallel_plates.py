@@ -1,6 +1,6 @@
 from scipy.interpolate import griddata
 from itertools import product
-from fem import IncompNavierStokesSolver2D, BoundaryCondition, BCType, BCVar
+from fem import NavierStokesSolver, BoundaryCondition, BCType, BCVar
 
 
 import matplotlib.pyplot as plt
@@ -57,7 +57,8 @@ if __name__ == '__main__':
             name="outlet-stressfree",
             boundary_key="right",
             type=BCType.NEUMANN,
-            traction=lambda x, y, t: (0.0, 0.0),
+            variable=BCVar.TRACTION,
+            value= (0.0, 0.0),
             apply_strong=False,
             metadata={"description": "do-nothing / traction-free outlet"}
         )
@@ -92,7 +93,7 @@ if __name__ == '__main__':
     ######################################################################
     # START SETTING UP SOLVER
     
-    uni = IncompNavierStokesSolver2D.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
+    uni = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order = order)
     uni.setup_physics(rho, mu)
     uni.setup_boundary_conditions(boundary_conditions)
 
@@ -101,7 +102,7 @@ if __name__ == '__main__':
     nx = len(dx)
     ny = len(dy)
 
-    non = IncompNavierStokesSolver2D.rectangular_domain_rect(nx, ny, a, b, order = order, dx = dx, dy=dy)
+    non = NavierStokesSolver.rectangular_domain_rect(nx, ny, a, b, order = order, dx = dx, dy=dy)
     non.setup_physics(rho, mu)
     non.setup_boundary_conditions(boundary_conditions)
     
