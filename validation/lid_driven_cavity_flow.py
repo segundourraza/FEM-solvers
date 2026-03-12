@@ -34,13 +34,15 @@ if __name__ == '__main__':
 
     
     nx = ny = 14
+    nx = ny = 40
     # nx = ny = 1
     
     
     order = 2
 
     rho_list = sorted(validation_data_u.keys())
-    rho = rho_list[0]
+    rho = rho_list[2]
+    print(rho)
     
     mu = 1
     V0 = 1.0

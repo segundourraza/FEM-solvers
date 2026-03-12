@@ -292,15 +292,12 @@ class _LegendreElement2D(ABC):
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
             grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
             
-            # Scalar projection of convected field onto each gradient direction
-            # dvdx[j] = ∂ψ_j/∂x · ve_x contracted → scalar: grad_psi[:,0] @ ve_x[con]
-            dvdx = grad_psi[:, 0] @ ve_x[con]   # ∂v/∂x at quad point (scalar)
-            dvdy = grad_psi[:, 1] @ ve_y[con]   # ∂v/∂y at quad point (scalar)
+            dvdx = grad_psi[:, 0] @ ve_x[con]
+            dvdy = grad_psi[:, 1] @ ve_y[con]
 
-            # C1[i,k] = ∫ ψ_i · dvdx · ψ_k dΩ
-            # C2[i,k] = ∫ ψ_i · dvdy · ψ_k dΩ
             C1[np.ix_(con, con)] += np.outer(psi_hat, psi_hat) * dvdx * detJ * wi
             C2[np.ix_(con, con)] += np.outer(psi_hat, psi_hat) * dvdy * detJ * wi
+
 class LinearTriangularElement(_LegendreElement2D):
     
     n = 3 # Number of nodes in element

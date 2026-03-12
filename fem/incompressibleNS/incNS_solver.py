@@ -577,7 +577,7 @@ class NavierStokesSolver():
                        residual:Callable, jacobian:Callable,
                        tol = 1e-8, max_iter = 10,
                        line_search = None, relaxation_parameter = 0,
-                       verbose = True, run_checks = True):
+                       verbose = True, run_checks = False):
         """
         Newton solver for one implicit time-step.
         u_prev : vector at previous time step (size 2*N)
