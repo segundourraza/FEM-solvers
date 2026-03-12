@@ -129,11 +129,12 @@ class NavierStokesSolver():
                                         h1: float,
                                         h2: float = None,
                                         order: int = 2,
+                                        origin: Tuple[float,float] = (0.0, 0.0),
                                         element: str = 'complete'):
         """
         Generate a 2D rectangular mesh of a rectangle height x width.
         """    
-        nodes, connectivity = generate_uniform_rect_mesh(nx=nx, ny=ny, width=width, h1=h1, h2=h2, order=order, element=element)
+        nodes, connectivity = generate_uniform_rect_mesh(nx=nx, ny=ny, width=width, h1=h1, h2=h2, order=order, element=element, origin=origin)
         boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
         return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
@@ -175,7 +176,9 @@ class NavierStokesSolver():
         
         self.__setup_physics = True
 
-    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], pref_corner_id = 1, pref_node:PressureReferenceNode = None, pref_value:float = 0.0):
+    def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], 
+                                  pref_corner_id = 1, pref_value:float = 0.0,
+                                  pref_node:PressureReferenceNode = None):
         self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
         require_pref = True
         for bc in self.__bc_dict.values():
@@ -206,7 +209,7 @@ class NavierStokesSolver():
 
     ###############################################################
     # SIMULATION EXECUTION
-    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, u0 = None, solver = 'picard', nonlinear_solver_options:dict = {}):
+    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, u0 = None, solver = 'newton', nonlinear_solver_options:dict = {}):
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         
@@ -356,7 +359,9 @@ class NavierStokesSolver():
                 
                 if vx_val is not None:
                     if self.vx_dof(node) in seen_dofs:
-                        if bc.apply_strong:
+                        if np.isclose(vx_val,fixed[self.vx_dof(node)]):
+                            pass
+                        elif bc.apply_strong:
                             warnings.warn("Boundary condition singularity detected for v_x: bc at '{}' and '{}' have same node index '{}'. Value for bc '{}' is applied due to 'strong_apply' flag".format(key, seen_dofs[self.vx_dof(node)], self.vx_dof(node), key), BoundaryConditionSingularityWarning)
                             fixed[self.vx_dof(node)] = float(vx_val)
                             seen_dofs[self.vx_dof(node)] = key
@@ -366,7 +371,9 @@ class NavierStokesSolver():
 
                 if vy_val is not None:
                     if self.vy_dof(node) in seen_dofs:
-                        if bc.apply_strong:
+                        if np.isclose(vy_val,fixed[self.vy_dof(node)]):
+                            pass
+                        elif bc.apply_strong:
                             warnings.warn("Boundary condition singularity detected for v_y: bc at '{}' and '{}' have same node index '{}'. Value for bc '{}' is applied due to 'strong_apply' flag".format(key, seen_dofs[self.vy_dof(node)], self.vy_dof(node), key), BoundaryConditionSingularityWarning)
                             fixed[self.vy_dof(node)] = float(vy_val)
                             seen_dofs[self.vy_dof(node)] = key
@@ -666,10 +673,10 @@ class NavierStokesSolver():
             warnings.warn("Newton-Raphson failed to converge after max_iter")
         
             
-        plt.scatter(free_idx, abs(R_f), marker ='.')
-        plt.gca().set_yscale('log')
-        plt.axvline(self.vdof, color = 'r')
-        plt.axvline(2*self.vdof, color = 'r')
+        # plt.scatter(free_idx, abs(R_f), marker ='.')
+        # plt.gca().set_yscale('log')
+        # plt.axvline(self.vdof, color = 'r')
+        # plt.axvline(2*self.vdof, color = 'r')
         return u_next
 
     def apply_backtracking(self, u_prev, u, du, res_norm, Residual, relaxation_parameter = 0.0, max_iters=10, c=1e-4, rho=0.5):

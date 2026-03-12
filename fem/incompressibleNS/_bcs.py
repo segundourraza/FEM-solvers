@@ -76,7 +76,6 @@ class BoundaryCondition:
         else:
             self.segments = None
 
-    
     def __call__(self, x:float, y:float, t:float = 0.0):
         """
         Evaluate the BC value at (x,y,t).
@@ -95,11 +94,22 @@ class BoundaryCondition:
         else:
             return self.value
 
+    def copy(self):
+        return BoundaryCondition(self.name, 
+                                 self.boundary_key, 
+                                 self.segments, 
+                                 self.type, 
+                                 self.variable, 
+                                 self.value, 
+                                 self.apply_strong, 
+                                 self.active, 
+                                 self.metadata)
 @dataclass
 class PressureReferenceNode:
 
     value: float
     index: Optional[int] = None
+    
 
 
 if __name__ == '__main__':

@@ -6,7 +6,11 @@ from typing import Dict, List, Tuple, Optional, Iterable
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
 
-def generate_uniform_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='complete'):
+def generate_uniform_rect_mesh(nx, ny, 
+                               width, h1, h2=None, 
+                               order=1, 
+                               element='complete',
+                               origin: Tuple[float,float] = (0.0, 0.0)):
     """
     Generate a rectangular or trapezium quad mesh.
 
@@ -92,6 +96,8 @@ def generate_uniform_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='com
                 # order: [bottom-left, bottom-right, top-right, top-left]
                 conn.append([bl, br, tr, tl])
 
+        nodes[:,0] += origin[0]
+        nodes[:,1] += origin[1]
         return nodes, np.array(conn, dtype=int)
 
     else:  # order == 2
@@ -140,7 +146,9 @@ def generate_uniform_rect_mesh(nx, ny, width, h1, h2=None, order=1, element='com
                 else:
                     # 9-node complete: add center last
                     conn.append([n00, n20, n22, n02, n10, n21, n12, n01, n11])
-
+        nodes[:,0] += origin[0]
+        nodes[:,1] += origin[1]
+        
         return nodes, np.array(conn, dtype=int)
 
 
