@@ -493,8 +493,8 @@ class NavierStokesSolver():
     # NEWTON-RAPHSON NON-LINEAR SOLVER
 
     def residual(self, u_prev, u_current)->np.ndarray:
-        v1, v2 =  u_current[:self.__N_vel_nodes], u_current[self.__N_vel_nodes:-self.__N_pres_nodes]
-        p = u_current[-self.__N_pres_nodes:]
+        v1, v2 =  u_current[:self.vdof], u_current[self.vdof:-self.pdof]
+        p = u_current[-self.pdof:]
 
         C = self._evaluate_C(u_current)
 
@@ -506,7 +506,7 @@ class NavierStokesSolver():
         R2 = C@v2 + (self.S12.T).dot(v1) + self.S11.dot(v2) + 2*self.S22.dot(v2) - self.Q2.dot(p)
         R3 = -(self.Q1.T).dot(v1) - (self.Q2.T).dot(v2)
     
-        return np.concatenate([R1, R2, R3]) - F
+        # return np.concatenate([R1, R2, R3]) - F
         return np.concatenate([R1, R2, R3])
 
     def Jacobian(self, u_prev, u_current)->csr_matrix:
@@ -539,6 +539,34 @@ class NavierStokesSolver():
         return bmat([[dR1dv1, dR1dv2, dR1dp],
                      [dR2dv1, dR2dv2, dR2dp],
                      [dR3dv1, dR3dv2, np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], 
+                     format='csr')
+
+    def Jacobian(self, u_prev, u_current):
+        v1 = u_current[:self.__N_vel_nodes]
+        v2 = u_current[self.__N_vel_nodes:-self.__N_pres_nodes]
+
+        C    = self._evaluate_C(u_current)
+        K1v1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
+        K2v1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
+        K1v2 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
+        K2v2 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
+
+        for con in self.__velocity_connectivity:
+            self.velocity_element._C1n2(self.__nodes, con, v1, v1, K1v1, K2v1)
+            self.velocity_element._C1n2(self.__nodes, con, v2, v2, K1v2, K2v2)
+
+        K1v1 *= self.rho;  K2v1 *= self.rho
+        K1v2 *= self.rho;  K2v2 *= self.rho
+
+        dR1dv1 = C + K1v1 + 2*self.S11 + self.S22
+        dR1dv2 =     K2v1 + self.S12          
+        dR2dv1 =     K1v2 + self.S12.T        
+        dR2dv2 = C + K2v2 + self.S11 + 2*self.S22
+        
+        
+        return bmat([[dR1dv1,       dR1dv2,     -self.Q1],
+                     [dR2dv1,       dR2dv2,     -self.Q2],
+                     [-self.Q1.T,   -self.Q2.T, np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], 
                      format='csr')
 
 
@@ -610,9 +638,10 @@ class NavierStokesSolver():
             else:
                 raise ValueError()
             
-
+            
             if run_checks:
-                j_res= self.fd_jacobian_check(residual, jacobian, u_prev, u_next, free_idx=free_idx)
+                j_res= self.fd_jacobian_check(residual, jacobian, u_prev, u_next)
+                # j_res= self.fd_jacobian_check(residual, jacobian, u_prev, u_next, free_idx=free_idx)
                 print(f"\t Jacobian relative error = {j_res:.4e}")
 
             res_norm = np.linalg.norm(R_f)
@@ -658,16 +687,17 @@ class NavierStokesSolver():
         return u + alpha * du, alpha
     
     def fd_jacobian_check(self, residual, jacobian, u_prev, u, free_idx = None, eps=1e-6):
-        Fu = residual(u_prev, u)
-        J = jacobian(u_prev, u)
-        v = np.random.randn(u.size)
+        if free_idx is None:
+            free_idx = np.ones_like(u, dtype=bool)
+        Fu = residual(u_prev, u)[free_idx]
+        J = jacobian(u_prev, u)[free_idx][:,free_idx]
+        v = np.random.randn(u[free_idx].size)
         v /= np.linalg.norm(v)
         Jv = J.dot(v)
-        FD = (residual(u_prev, u + eps*v) - Fu) / eps
-        if free_idx is None:
-            res = np.linalg.norm(Jv - FD) / (np.linalg.norm(Jv) + 1e-16)
-        else:
-            res = np.linalg.norm(Jv[free_idx] - FD[free_idx]) / (np.linalg.norm(Jv[free_idx]) + 1e-16)
+        _u = np.copy(u)
+        _u[free_idx] += eps*v
+        FD = (residual(u_prev, _u)[free_idx] - Fu) / eps
+        res = np.linalg.norm(Jv - FD) / (np.linalg.norm(Jv) + 1e-16)
         if res < eps or np.isclose(res, eps):
             return res
         else:

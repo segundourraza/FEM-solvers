@@ -108,7 +108,7 @@ if __name__ == '__main__':
     v0 = -0.1
     uSol = sol.solve_steadystate(v0=v0,
                                  nonlinear_solver_options=nonlinear_option,
-                                #  solver = 'newton',
+                                 solver = 'newton',
                                  )
     vx, vy, p = uSol[:sol.vdof], uSol[sol.vdof:-sol.pdof], uSol[-sol.pdof:]
     
