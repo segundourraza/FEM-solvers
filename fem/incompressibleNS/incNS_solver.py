@@ -482,7 +482,7 @@ class NavierStokesSolver():
                 res = self.residual(u_prev, u_next)
                 res = res[free_idx]
                 res_norm = np.linalg.norm(res)
-                print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||Δ||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
+                print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
             if  du_norm < tol:
                 if verbose:
                     print()
@@ -515,38 +515,6 @@ class NavierStokesSolver():
     
         # return np.concatenate([R1, R2, R3]) - F
         return np.concatenate([R1, R2, R3])
-
-    def Jacobian(self, u_prev, u_current)->csr_matrix:
-        v1 = u_current[:self.__N_vel_nodes]
-        v2 = u_current[self.__N_vel_nodes:-self.__N_pres_nodes]
-        p = u_current[-self.__N_pres_nodes:]
-
-        # Compute Matrcies
-        C = self._evaluate_C(u_current)
-
-        C1_1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
-        C2_1 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
-        for con in self.__velocity_connectivity:
-            self.velocity_element._C1n2(self.__nodes, con, C1_1, C2_1)
-        C1_1 *= self.rho
-        C2_1 *= self.rho
-
-        # COMPUTING JACOBIAN
-        dR1dv1 = C + C1_1@v1 + 2*self.S11 + self.S22
-        dR1dv2 = C2_1@v1 + self.S12
-        dR1dp  = -self.Q1
-
-        dR2dv1 = C1_1@v2 + self.S12.T
-        dR2dv2 = C + C2_1@v2 + self.S11 + 2*self.S22
-        dR2dp  = -self.Q2
-
-        dR3dv1 = -self.Q1.T
-        dR3dv2 = -self.Q2.T
-        
-        return bmat([[dR1dv1, dR1dv2, dR1dp],
-                     [dR2dv1, dR2dv2, dR2dp],
-                     [dR3dv1, dR3dv2, np.zeros((self.__N_pres_nodes, self.__N_pres_nodes))]], 
-                     format='csr')
 
     def Jacobian(self, u_prev, u_current):
         v1 = u_current[:self.__N_vel_nodes]
@@ -618,7 +586,7 @@ class NavierStokesSolver():
             Jac = jacobian(u_prev, u_next)
             if reduce_dim:
                 # Partition vectors/matrices
-                # Δ_c (fixed) = prescribed - current
+                # delta_c (fixed) = prescribed - current
                 delta_c = np.empty(len(fixed_idx), dtype=float)
                 for i, dof in enumerate(fixed_idx):
                     delta_c[i] = fixed_dict[dof] - u_next[dof]
@@ -662,7 +630,7 @@ class NavierStokesSolver():
             # convergence check
             du_norm = np.linalg.norm(delta[free_idx])
             if verbose:
-                print(f"Iteration: {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||Δ||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
+                print(f"Iteration: {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
             if res_norm < tol and du_norm < tol:
                 if verbose:
                     print()
