@@ -96,37 +96,53 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution'):
     if len(file_list) == 0:
         raise RuntimeError(f"No file found with pattern: '{pattern}'")
 
-    target_x, target_y = -0.125, 0.0
-    convergence_data = np.zeros((len(file_list),2))
+    target_pos1 = [-0.125, 0.0]
+    convergence_data1 = np.zeros((len(file_list),2))
+    
+    target_pos2 = [0.625, 1.0]
+    convergence_data2 = np.zeros((len(file_list),2))
+    
+    target_pos = [(-0.125, 0.0),
+                  (0.25, 0.5),
+                  (0.625, 1.0)]
+    convergence_data = {_:np.zeros((len(file_list),2)) for _ in target_pos}
+    
     for i,name in enumerate(file_list):
         arrays, scalars = load_solution_hdf5(fp / name)
-        
+
         tolerance = 1e-6
-        idx = next( (i for i, node in enumerate(arrays['p2_nodes'])
-                     if np.isclose(node[0], target_x, atol=tolerance)
-                     and np.isclose(node[1], target_y, atol=tolerance)))
-        convergence_data[i] = scalars['Ne'], arrays['vx'][idx]
+        for pos in target_pos:
+            idx = next( (i for i, node in enumerate(arrays['p2_nodes'])
+                        if np.isclose(node[0], pos[0], atol=tolerance)
+                        and np.isclose(node[1], pos[1], atol=tolerance)))
+            convergence_data[pos][i] = scalars['Ne'], arrays['vx'][idx]
+
+    idx = convergence_data[target_pos[0]][:, 0].argsort()
+    for pos in target_pos:
+        convergence_data[pos] = convergence_data[pos][idx]
     
-    
-    convergence_data = convergence_data[convergence_data[:, 0].argsort()]
-    print(convergence_data[:,0])
-    x_data = convergence_data[:-1,0]
-    error = abs(convergence_data[:-1,1] - convergence_data[-1,1])
-    plt.loglog(x_data, error)
-    
+    marker = ['o', 's', '^', 'd']
     fig1, ax1 = plt.subplots()
-    ax1.loglog(x_data, error, '-s')
-    m,c = np.polyfit(np.log(x_data), np.log(error), 1)
-    def f(x): return x**(m)*np.exp(c)
-    ax1.plot(x_data, f(x_data), '--r', label = r"$\log(e) = {:.2f}\log(ne) + {:.2f}$".format(m,c))
-    
+    for i,(target,data) in enumerate(convergence_data.items()):
+        x_data = data[:-1,0]
+        error = abs(data[:-1,1] - data[-1,1])
+        
+        l, = ax1.loglog(x_data, error, '-',
+                        marker = marker[i],
+                        markerfacecolor = 'none',
+                         label = "(x,y) = ({},{})".format(*target) )
+        m,c = np.polyfit(np.log(x_data), np.log(error), 1)
+        def f(x): return x**(m)*np.exp(c)
+        ax1.plot(x_data, f(x_data), '--', color = l.get_color(), 
+                 label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c))
+        
     ax1.grid(which='major', linestyle='-', linewidth=0.8)
     ax1.grid(which='minor', linestyle='-', linewidth=0.25)
     
     ax1.legend()
 
     ax1.set_xlabel("Number of Elements")
-    ax1.set_ylabel("$||v_x(x, T; N_e) - v_x(x, T; {:.0f})||_2$".format(convergence_data[-1,0]))
+    ax1.set_ylabel("$||v_x(x, T; N_e) - v_x(x, T; {:.0f})||_2$".format(convergence_data1[-1,0]))
     ax1.set_title("Spatial Computational Complexity")
     fig1.tight_layout()
 
