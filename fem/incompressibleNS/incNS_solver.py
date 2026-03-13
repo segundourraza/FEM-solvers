@@ -1,4 +1,5 @@
-import h5py, warnings
+import h5py, warnings, inspect
+from enum import Enum, auto
 from copy import deepcopy
 from datetime import timezone, datetime
 from pathlib import Path
@@ -21,6 +22,9 @@ from .._utils import _progress_range, tqdm, NonConstantJacobian
 from .._utils._mesh import EdgesDict, group_array
 
 
+class SimulationType(Enum):
+    STEADYSTATE = auto()
+    TRANSIENT = auto()
 class BoundaryConditionSingularityWarning(Warning):
     def __init__(self, *args):
         super().__init__(*args)
@@ -213,18 +217,22 @@ class NavierStokesSolver():
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         
-        self.__nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
+        self.nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
 
         u0 = self.__ss_preprocessing(v0,p0, u0 = None)
         if solver == 'picard':
-            uSol = self._picards_iteration(0.0, u0, **self.__nonlinear_solver_parameters)            
+            _process_solver_parameter_dict(self._picards_iteration, nonlinear_solver_options)
+            uSol = self._picards_iteration(0.0, u0, **self.nonlinear_solver_parameters)
         elif solver == 'newton':
-            uSol = self._NewtonRaphson(0.0, u0, self.residual, self.Jacobian, **self.__nonlinear_solver_parameters)        
+            _process_solver_parameter_dict(self._NewtonRaphson, nonlinear_solver_options)
+            uSol = self._NewtonRaphson(0.0, u0, self.residual, self.Jacobian, **self.nonlinear_solver_parameters)        
+            self.nonlinear_solver_parameters
         else:
             raise ValueError()
+        self.simulation_name = f"NavierStokes_steady_state_{solver}"
+        self.__simulation_type = SimulationType.STEADYSTATE
         self.solution = uSol
         return uSol
-        return uSol[:self.__N_vel_nodes], uSol[self.__N_vel_nodes:-self.__N_pres_nodes], uSol[-self.__N_pres_nodes:]
     
 
     ####################################################################
@@ -791,12 +799,15 @@ class NavierStokesSolver():
         tqdm.write(f"File saved successfully: {filepath}\n")
         plt.close(fig)
             
-    def save(self, prepend = None, directory = None, append_time = False):
+    def save(self, prepend = None, append=None, directory = None, append_time = False):
         if prepend is None:
             filename = self.simulation_name
         else:
             filename = prepend + "_" + self.simulation_name
 
+        if append:
+            filename += str(append)
+            
         if append_time:
             filename += "_" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
 
@@ -806,7 +817,7 @@ class NavierStokesSolver():
         
         # Determine directory
         if directory is None:
-            directory = Path.cwd() / "solution2D"
+            directory = Path.cwd() / "solution"
         else:
             directory = Path(directory)
 
@@ -814,35 +825,38 @@ class NavierStokesSolver():
         directory.mkdir(parents=True, exist_ok=True)
         filepath = directory / filename
 
-        with h5py.File(filepath, "w") as f:
-            sol_grp = f.create_group("solution")
+        if self.__simulation_type == SimulationType.STEADYSTATE:
+            with h5py.File(filepath, "w") as f:
+                sol_grp = f.create_group("solution")
+                
+                # -----------------
+                # Save arrays
+                # -----------------
+                arr_grp = sol_grp.create_group("arrays")
+                for name, array in zip(['vx', 'vy', 'p', 'p2_nodes', 'p1_nodes', 'connectivity'], [*self.get_solution(),  self.p2_nodes, self.p1_nodes, self.__velocity_connectivity]):
+                    arr_grp.create_dataset(
+                        name,
+                        data=array,
+                        compression="gzip",
+                        compression_opts=4,
+                        shuffle=True
+                )
+
+
+                # -----------------
+                # Save scalars
+                # -----------------
+                scal_grp = sol_grp.create_group("scalars")
+                for name, value in zip(['Ne', 'vdof', 'pdof'], [self.__Nele, self.vdof, self.pdof]):
+                    scal_grp.create_dataset(name, data=value)
+
+                # -----------------
+                # Save metadata
+                # -----------------
+                sol_grp.attrs["saved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+        else:
+            raise RuntimeError()
             
-            # -----------------
-            # Save arrays
-            # -----------------
-            arr_grp = sol_grp.create_group("arrays")
-            for name, array in zip(['sol_c', 'sol_w', 't', 'mass', 'energy', 'nodes', 'connectivity'], [self.sol_c, self.sol_w, self.t, self.__mass, self.__energy, self.__nodes, self.__velocity_connectivity]):
-                arr_grp.create_dataset(
-                    name,
-                    data=array,
-                    compression="gzip",
-                    compression_opts=4,
-                    shuffle=True
-            )
-
-
-            # -----------------
-            # Save scalars
-            # -----------------
-            scal_grp = sol_grp.create_group("scalars")
-            for name, value in zip(['Ne', 'N', 'dt', 'T'], [self.__Nele, self.__N_vel_nodes, self.__dt, self.__T]):
-                scal_grp.create_dataset(name, data=value)
-
-            # -----------------
-            # Save metadata
-            # -----------------
-            sol_grp.attrs["saved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
-        
         print("Simulation successfully saved as : {}\n".format(filepath))
 
     #####################################################################
@@ -858,7 +872,7 @@ class NavierStokesSolver():
         return self.solution[:self.vdof], self.solution[self.vdof:-self.pdof], self.solution[-self.pdof:]
 
     ######################################################
-    # PROPERTIES    
+    # PROPERTIES
     @property
     def vdof(self):
         """Number of velocity nodes"""
@@ -899,8 +913,8 @@ class NavierStokesSolver():
     def connectivity(self):
         """connectivity"""
         return self.__velocity_connectivity
-    
 
+    
     def vx_dof(self, node_idx: Union[int, Iterable]) -> int:
         if isinstance(node_idx, Iterable):
             return [int(_) for _ in node_idx]
@@ -920,6 +934,7 @@ class NavierStokesSolver():
             return int(2 * self.__N_vel_nodes + node_idx)
 
 
+
     @property
     def t(self):
         """time array"""
@@ -935,3 +950,12 @@ class NavierStokesSolver():
         """Number of time steps"""
         return self.__nt
 
+
+
+
+def _process_solver_parameter_dict(func, options:dict):
+    sig = inspect.signature(func)
+    for name, param in sig.parameters.items():
+        if param.default is not inspect.Parameter.empty and name not in options:
+            options[name] = param.default
+        
