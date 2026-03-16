@@ -10,7 +10,7 @@ plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
                      'mathtext.fontset': 'cm'})
 
 
-x_domain = [-0.5, 1.0]
+x_domain = [-0.5, 1.5]
 y_domain = [-0.5, 1.5]
 
 origin = (x_domain[0], y_domain[0])
@@ -37,8 +37,14 @@ def vx_analytical(x, y):
 def vy_analytical(x, y):
     return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
 
+def gradv_analytical(x, y):
+    return np.array([[-lam*np.exp(lam*x)*np.cos(2*np.pi*y),                 2*np.pi*np.exp(lam*x)*np.sin(2*np.pi*y)],
+                     [lam**2/(2*np.pi)*np.exp(lam*x)*np.sin(2*np.pi*y) ,    -lam*np.exp(lam*x)*np.cos(2*np.pi*y)]])
+
+
 def p_analytical(x, y):
-    return 0.5*(pref - np.exp(2*lam*x))
+    return 0.5*(pref - np.exp(2*lam*x))*rho
+
 
 def execute(nx):
     ny = nx
@@ -67,6 +73,9 @@ def execute(nx):
     
     nonlinear_options = {'tol': 1e-10}
     sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=nonlinear_options)
+    
+    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
     sol.save(append=f"_nx{nx}")
 
 
@@ -96,61 +105,88 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution'):
     if len(file_list) == 0:
         raise RuntimeError(f"No file found with pattern: '{pattern}'")
 
-    target_pos1 = [-0.125, 0.0]
-    convergence_data1 = np.zeros((len(file_list),2))
-    
-    target_pos2 = [0.625, 1.0]
-    convergence_data2 = np.zeros((len(file_list),2))
-    
-    target_pos = [(-0.125, 0.0),
-                  (0.25, 0.5),
-                  (0.625, 1.0)]
-    convergence_data = {_:np.zeros((len(file_list),2)) for _ in target_pos}
+    convergence_data = np.zeros((len(file_list),4))
     
     for i,name in enumerate(file_list):
         arrays, scalars = load_solution_hdf5(fp / name)
+        convergence_data[i] = scalars['Ne'], scalars['L2_velocity_norm'], scalars['H1_norm'], scalars['L2_pressure_norm']
+        # h = (x_domain[1] - x_domain[0])/(2*scalars['Ne'] + 1)
+        # print(h)
+        # convergence_data[i] = h, scalars['H1_norm'], scalars['L2_velocity_norm'], scalars['L2_pressure_norm']
 
-        tolerance = 1e-6
-        for pos in target_pos:
-            idx = next( (i for i, node in enumerate(arrays['p2_nodes'])
-                        if np.isclose(node[0], pos[0], atol=tolerance)
-                        and np.isclose(node[1], pos[1], atol=tolerance)))
-            convergence_data[pos][i] = scalars['Ne'], arrays['vx'][idx]
-
-    idx = convergence_data[target_pos[0]][:, 0].argsort()
-    for pos in target_pos:
-        convergence_data[pos] = convergence_data[pos][idx]
     
-    marker = ['o', 's', '^', 'd']
+    convergence_data = convergence_data[convergence_data[:, 0].argsort()]
+    
     fig1, ax1 = plt.subplots()
-    for i,(target,data) in enumerate(convergence_data.items()):
-        x_data = data[:-1,0]
-        error = abs(data[:-1,1] - data[-1,1])
+    
+    x_data, L2_velocity_norm, H1_norm, L2_pressure_norm = convergence_data.T
+    # x_data = convergence_data[:-1,0]
+    # H1_norm = abs(convergence_data[:-1,1] - convergence_data[-1,1])
+    # L2_velocity_norm = abs(convergence_data[:-1,2] - convergence_data[-1,2])
+    # L2_pressure_norm = abs(convergence_data[:-1,3] - convergence_data[-1,3])
         
-        l, = ax1.loglog(x_data, error, '-',
-                        marker = marker[i],
-                        markerfacecolor = 'none',
-                         label = "(x,y) = ({},{})".format(*target) )
-        m,c = np.polyfit(np.log(x_data), np.log(error), 1)
-        def f(x): return x**(m)*np.exp(c)
-        ax1.plot(x_data, f(x_data), '--', color = l.get_color(), 
-                 label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c))
-        
+    l, = ax1.loglog(x_data, H1_norm, '-o',
+                    markerfacecolor = 'none', label = "$H_1$ norm")
+    m,c = np.polyfit(np.log(x_data), np.log(H1_norm), 1)
+    ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
+                label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c))
+    
+    l, = ax1.loglog(x_data, L2_velocity_norm, '-o',
+                    markerfacecolor = 'none', label = "$L_2$ velocity norm")
+    m,c = np.polyfit(np.log(x_data), np.log(L2_velocity_norm), 1)
+    ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
+                label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c))
+    
+    l, = ax1.loglog(x_data, L2_pressure_norm, '-o',
+                    markerfacecolor = 'none', label = "$L_2$ pressure norm")
+    m,c = np.polyfit(np.log(x_data), np.log(L2_pressure_norm), 1)
+    ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
+                label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c))
+    
+
     ax1.grid(which='major', linestyle='-', linewidth=0.8)
     ax1.grid(which='minor', linestyle='-', linewidth=0.25)
     
     ax1.legend()
 
     ax1.set_xlabel("Number of Elements")
-    ax1.set_ylabel("$||v_x(x, T; N_e) - v_x(x, T; {:.0f})||_2$".format(convergence_data1[-1,0]))
+    ax1.set_ylabel("$||\\mathbf{v} - \\mathbf{v}_*||_{H^1(\\Omega)}$")
     ax1.set_title("Spatial Computational Complexity")
     fig1.tight_layout()
+
+    print_convergence_table(convergence_data)
+
+
+def convergence_rate(err_coarse, err_fine, h_coarse, h_fine):
+    return np.log(err_coarse / err_fine) / np.log(h_coarse / h_fine)
+
+def print_convergence_table(results):
+    """
+    results: list of (h, err_u_L2, err_u_H1, err_p_L2)
+    """
+    print(f"{'h':>10}  {'|u-uh|_L2':>12}  {'rate':>6}  "
+          f"{'|u-uh|_H1':>12}  {'rate':>6}  "
+          f"{'|p-ph|_L2':>12}  {'rate':>6}")
+    print("-" * 75)
+    for i, (h, eL2, eH1, epL2) in enumerate(results):
+        if i == 0:
+            print(f"{h:>10.4e}  {eL2:>12.4e}  {'—':>6}  "
+                  f"{eH1:>12.4e}  {'—':>6}  "
+                  f"{epL2:>12.4e}  {'—':>6}")
+        else:
+            h_prev, eL2_prev, eH1_prev, epL2_prev = results[i-1]
+            rL2  = convergence_rate(eL2_prev,  eL2,  h_prev, h)
+            rH1  = convergence_rate(eH1_prev,  eH1,  h_prev, h)
+            rpL2 = convergence_rate(epL2_prev, epL2, h_prev, h)
+            print(f"{h:>10.4e}  {eL2:>12.4e}  {rL2:>6.2f}  "
+                  f"{eH1:>12.4e}  {rH1:>6.2f}  "
+                  f"{epL2:>12.4e}  {rpL2:>6.2f}")
 
 
 
 if __name__ == '__main__':
-    # nx_list = [4, 8, 16, 20, 24, 30]
-    # nx_list = [40]
+    # nx_list = [4, 8, 16, 20, 24, 30, 40]
+    # # nx_list = [40]
     # for nx in nx_list:
     #     execute(nx)
 

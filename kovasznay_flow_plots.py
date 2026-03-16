@@ -47,9 +47,8 @@ def vy_analytical(x, y):
     return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
 
 def p_analytical(x, y):
-    return 0.5*(pref - np.exp(2*lam*x))
-    return pref - 0.5*np.exp(2*lam*x)
-
+    return 0.5*(pref - np.exp(2*lam*x))*rho
+    
 
 # ── Boundary conditions ───────────────────────────────────────────────────────
 top = BoundaryCondition(
@@ -127,7 +126,7 @@ linestyles = ['--', '-', '-.']
 
 
 factor_list = [1, 4, 8]
-factor_list = [8]
+factor_list = [4]
 fig4, ax4 = plt.subplots(1,len(factor_list))
 if len(factor_list) == 1:
     ax4 = [ax4]
@@ -144,19 +143,19 @@ for i,factor in enumerate(factor_list):
 
     sol_vx, sol_vy, sol_p = sol.get_solution()
     
-    test = np.allclose(sol_vx, vx_analytical(*sol.p2_nodes.T), atol=1e-4)
-    if not test:
-        mask = ~np.isclose(sol_vx, vx_analytical(*sol.p2_nodes.T), atol=1e-4)
-        plt.close('all')
+    # test = np.allclose(sol_vx, vx_analytical(*sol.p2_nodes.T), atol=1e-4)
+    # if not test:
+    #     mask = ~np.isclose(sol_vx, vx_analytical(*sol.p2_nodes.T), atol=1e-4)
+    #     plt.close('all')
 
-        plt.figure()
-        sol.plot_mesh()
-        plt.plot(*sol.p2_nodes[mask].T, 'sr', ms = 10)
+    #     plt.figure()
+    #     sol.plot_mesh()
+    #     plt.plot(*sol.p2_nodes[mask].T, 'sr', ms = 10)
 
-        plt.figure()
-        plt.semilogy(abs(sol_vx - vx_analytical(*sol.p2_nodes.T)))
+    #     plt.figure()
+    #     plt.semilogy(abs(sol_vx - vx_analytical(*sol.p2_nodes.T)))
         
-        break
+    #     break
     sol_x_stations = {k:v for k,v in sol.group_by_x().items() if k in target_x_station}
     sol_y_stations = {k:v for k,v in sol.group_by_y().items() if k in target_y_station}
     #################################################
@@ -225,4 +224,18 @@ ax2[-1].legend(fontsize=11)
 ax3[-1].legend(fontsize=11)
 
 
+plt.close('all')
+
+fig, ax = plt.subplots()
+
+y_target = 0.0
+nodes   = sol.p1_nodes
+top_idx = np.where(np.abs(nodes[:, 1] - y_target) < 1e-10)[0]
+ax.plot(sol.p1_nodes[top_idx, 0], sol_p[top_idx], 
+        'k', marker=markers[i], linestyle=linestyles[i],
+        ms=8, markerfacecolor='none',
+        label = f'FEM: Q9 {nx} x {ny}')
+ax.plot(x_fine,p_analytical(x_fine, y_target), 'r', lw=2, label='Analytical')
+ax.set_yscale('log')
+print(p_analytical(*sol.p1_nodes[top_idx].T)/sol_p[top_idx])
 plt.show()

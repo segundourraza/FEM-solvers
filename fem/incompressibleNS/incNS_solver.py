@@ -288,11 +288,11 @@ class NavierStokesSolver():
         
         for xi, wi in zip(*self.velocity_element.edge_quadrature_points(self.velocity_element.r_convective)):
             # VELOCITY FINITE ELEMENT
-            psi = self.velocity_element.edge_basis_function(xi)
-            grad_psi = self.velocity_element.edge_grad_basis_function(xi)
+            psi_hat = self.velocity_element.edge_basis_function(xi)
+            grad_psi_hat = self.velocity_element.edge_grad_basis_function(xi)
 
             # EDGE PARAMETERS
-            t = grad_psi @ self.__nodes[con,:] # tangent vector
+            t = grad_psi_hat @ self.__nodes[con,:] # tangent vector
             detJ = np.linalg.norm(t)
             t_unit = t / detJ
             n = np.array([t_unit[1], -t_unit[0]])
@@ -302,7 +302,7 @@ class NavierStokesSolver():
                 # PRESSURE FINITE ELEMENT
                 phi = self.pressure_element.edge_basis_function(xi)
 
-                grad_v = grad_psi@v_nodes
+                grad_v = grad_psi_hat@v_nodes
                 p = phi@p_nodes
                 d = 0.5*(grad_v + grad_v.T)
                 tau = 2*self.mu*d
@@ -311,7 +311,7 @@ class NavierStokesSolver():
                 t = sigma @ n
             else:
                 if callable(bc.value):
-                    coords = psi @ self.__nodes[con,:]
+                    coords = psi_hat @ self.__nodes[con,:]
                     t = bc.value(*coords, t)
                 elif isinstance(bc.value, tuple):
                     t = list(bc.value)
@@ -319,7 +319,7 @@ class NavierStokesSolver():
                     t = - bc.value*n
                 else:
                     raise ValueError            
-            test = np.outer(psi, t)*detJ*wi
+            test = np.outer(psi_hat, t)*detJ*wi
             F[self.vx_dof(con)] += test[:,0]
             F[self.vy_dof(con)] += test[:,1]
 
@@ -850,6 +850,15 @@ class NavierStokesSolver():
                 for name, value in zip(['Ne', 'vdof', 'pdof'], [self.__Nele, self.vdof, self.pdof]):
                     scal_grp.create_dataset(name, data=value)
 
+                if hasattr(self, 'H1_norm'):
+                    scal_grp.create_dataset('H1_norm', data=self.H1_norm)
+                
+                if hasattr(self, 'L2_velocity_norm'):
+                    scal_grp.create_dataset('L2_velocity_norm', data=self.L2_velocity_norm)
+                
+                if hasattr(self, 'L2_pressure_norm'):
+                    scal_grp.create_dataset('L2_pressure_norm', data=self.L2_pressure_norm)
+                
                 # -----------------
                 # Save metadata
                 # -----------------
@@ -869,7 +878,63 @@ class NavierStokesSolver():
         return {k:sorted(v,key=lambda p: self.__nodes[p,0]) for k,v in group_array(self.__nodes[:,1]).items()}
     
     def get_solution(self):
-        return self.solution[:self.vdof], self.solution[self.vdof:-self.pdof], self.solution[-self.pdof:]
+        return self._get_components(self.solution)
+
+    def _get_components(self, u):
+        return u[:self.vdof], u[self.vdof:-self.pdof], u[-self.pdof:]
+
+    def error_analysis(self, vx_analytical:Callable, vy_analytical:Callable, gradv_analytical:Callable, p_analytical:Callable):
+        vx, vy, p = self.get_solution()
+
+        L2_pressure_norm = 0
+        L2_velocity_norm = 0
+        H1_norm = 0
+        r = 4
+
+        for con in self.connectivity:    
+            # Gauss-Legendre Quadrature
+            for (xi, eta), wi in zip(*self.velocity_element.quadrature_points(r)):
+                psi_hat         = self.velocity_element.basis_functions(xi, eta)
+                grad_psi_hat    = self.velocity_element.grad_basis_functions(xi, eta)
+                jac             = self.velocity_element.jacobian(self.__nodes[con], xi, eta)
+                detJ = np.linalg.det(jac)
+                invJ_T = np.array([[jac[1,1], -jac[1,0]],
+                                   [-jac[0,1], jac[0,0]]])*(1/detJ)
+                grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
+                
+                coord = psi_hat @ self.__nodes[con,:] # Physical coordinate sof quadrature point
+                
+                # L2 terms
+                vx_q = np.dot(vx[con], psi_hat)
+                vy_q = np.dot(vy[con], psi_hat)
+                L2_contribution = ((vx_q - vx_analytical(*coord))**2 + (vy_q - vy_analytical(*coord))**2)*detJ*wi
+                
+                L2_velocity_norm += L2_contribution
+
+                # H1 seminorm
+                gradv = [vx[con], vy[con]] @ grad_psi
+                H1_norm += np.sum((gradv - gradv_analytical(*coord))**2)*detJ*wi
+        
+        for con in self.__pressure_connectivity:
+            # Gauss-Legendre Quadrature
+            for (xi, eta), wi in zip(*self.pressure_element.quadrature_points(r)):
+                psi_hat      = self.pressure_element.basis_functions(xi, eta)
+                jac          = self.pressure_element.jacobian(self.p1_nodes[con], xi, eta)
+                detJ = np.linalg.det(jac)
+                
+                # L2 terms
+                coord = psi_hat @ self.p1_nodes[con] # Physical coordinate sof quadrature point
+                pq = np.dot(psi_hat, p[con])
+                L2_pressure_norm += (pq - p_analytical(*coord))**2*detJ*wi
+
+        self.L2_velocity_norm = np.sqrt(L2_velocity_norm)
+        self.H1_norm = np.sqrt(L2_velocity_norm + H1_norm)
+        self.L2_pressure_norm = np.sqrt(L2_pressure_norm)
+        return self.H1_norm, self.L2_velocity_norm, self.L2_pressure_norm
+
+
+
+
 
     ######################################################
     # PROPERTIES
@@ -951,11 +1016,13 @@ class NavierStokesSolver():
         return self.__nt
 
 
-
-
 def _process_solver_parameter_dict(func, options:dict):
     sig = inspect.signature(func)
     for name, param in sig.parameters.items():
         if param.default is not inspect.Parameter.empty and name not in options:
             options[name] = param.default
         
+
+
+
+
