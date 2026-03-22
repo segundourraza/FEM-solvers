@@ -100,30 +100,6 @@ class NavierStokesSolver():
         else:
             raise RuntimeError()
             
-
-
-    def __ts_preprocessing(self,):
-
-        # Compute Jacobian
-        self.__detJ = [0]*self.__Nele
-        self.__InvJ = [0]*self.__Nele
-        try: 
-            for e,con in enumerate(self.__velocity_connectivity):
-                self.__detJ[e], self.__InvJ[e] = self.velocity_element.compute_ele_properties(e,self.__nodes[con])
-        
-            # Evaluate 'Mass' and 'Stiffness' matrix. These DO NOT change with time or value of C
-            self.M = self.__assemble_M_constant_jac()
-            self.K = self.__assemble_K_constant_jac()
-
-        except NonConstantJacobian:
-            for e,con in enumerate(self.__velocity_connectivity):
-                pass
-        except Exception as e:
-            raise e
-
-
-
-
     #####################################################################
     # CONSTRUCTORS
     @classmethod
@@ -507,22 +483,21 @@ class NavierStokesSolver():
     #####################################################################
     # NEWTON-RAPHSON NON-LINEAR SOLVER
 
-    def residual(self, u_prev, u_current)->np.ndarray:
+    def residual(self, u_prev, u_current, )->np.ndarray:
         v1, v2 =  u_current[:self.vdof], u_current[self.vdof:-self.pdof]
         p = u_current[-self.pdof:]
 
         C = self._evaluate_C(u_current)
 
-        # Compute Forcing vector
-        F = self._assemble_F(u_current,)
-        
+        # Add Neumann traction contributions into rhs here as needed
+        F = self.__apply_neumann(u=u_prev)
+
         # COMPUTING RESIDUAL VECTOR
         R1 = C@v1 + 2*self.S11.dot(v1) + self.S22.dot(v1) + self.S12.dot(v2) - self.Q1.dot(p)
         R2 = C@v2 + (self.S12.T).dot(v1) + self.S11.dot(v2) + 2*self.S22.dot(v2) - self.Q2.dot(p)
         R3 = -(self.Q1.T).dot(v1) - (self.Q2.T).dot(v2)
     
-        # return np.concatenate([R1, R2, R3]) - F
-        return np.concatenate([R1, R2, R3])
+        return np.concatenate([R1, R2, R3]) - F
 
     def Jacobian(self, u_prev, u_current):
         v1 = u_current[:self.__N_vel_nodes]
@@ -913,7 +888,7 @@ class NavierStokesSolver():
 
                 # H1 seminorm
                 gradv = [vx[con], vy[con]] @ grad_psi
-                H1_norm += np.sum((gradv - gradv_analytical(*coord))**2)*detJ*wi
+                H1_norm += np.linalg.norm(gradv - gradv_analytical(*coord), ord = 'fro')*detJ*wi
         
         for con in self.__pressure_connectivity:
             # Gauss-Legendre Quadrature

@@ -10,43 +10,45 @@ plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
                      'mathtext.fontset': 'cm'})
 
 
-x_domain = [-0.5, 1.5]
-y_domain = [-0.5, 1.5]
 
-origin = (x_domain[0], y_domain[0])
+def execute_kovazney(nx):
+    x_domain = [-0.5, 1.5]
+    y_domain = [-0.5, 1.5]
 
-a = x_domain[1] - x_domain[0]
-b = y_domain[1] - y_domain[0]
+    origin = (x_domain[0], y_domain[0])
 
-
-order  = 2             # Q9 elements
-
-# ── Physics ───────────────────────────────────────────────────────────────────
-Re = rho = 40.0
-mu = 1.0
+    a = x_domain[1] - x_domain[0]
+    b = y_domain[1] - y_domain[0]
 
 
-pref = 10
-corner_id = 0
+    order  = 2             # Q9 elements
 
-    
-lam = Re/2 - np.sqrt((Re/2)**2 + 4*np.pi**2)
-def vx_analytical(x, y):
-    return 1 - np.exp(lam*x)*np.cos(2*np.pi*y)
-
-def vy_analytical(x, y):
-    return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
-
-def gradv_analytical(x, y):
-    return np.array([[-lam*np.exp(lam*x)*np.cos(2*np.pi*y),                 2*np.pi*np.exp(lam*x)*np.sin(2*np.pi*y)],
-                     [lam**2/(2*np.pi)*np.exp(lam*x)*np.sin(2*np.pi*y) ,    -lam*np.exp(lam*x)*np.cos(2*np.pi*y)]])
+    # ── Physics ───────────────────────────────────────────────────────────────────
+    Re = rho = 40.0
+    mu = 1.0
 
 
-def p_analytical(x, y):
-    return 0.5*(pref - np.exp(2*lam*x))*rho
+    pref = 10
+    corner_id = 0
+
+        
+    lam = Re/2 - np.sqrt((Re/2)**2 + 4*np.pi**2)
+    def vx_analytical(x, y):
+        return 1 - np.exp(lam*x)*np.cos(2*np.pi*y)
+
+    def vy_analytical(x, y):
+        return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
+
+    def gradv_analytical(x, y):
+        return np.array([[-lam*np.exp(lam*x)*np.cos(2*np.pi*y),                 2*np.pi*np.exp(lam*x)*np.sin(2*np.pi*y)],
+                        [lam**2/(2*np.pi)*np.exp(lam*x)*np.sin(2*np.pi*y) ,    -lam*np.exp(lam*x)*np.cos(2*np.pi*y)]])
 
 
-def execute(nx):
+    def p_analytical(x, y):
+        return 0.5*(pref - np.exp(2*lam*x))*rho
+
+
+
     ny = nx
 
     
@@ -76,7 +78,171 @@ def execute(nx):
     
     H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
     print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
-    sol.save(append=f"_nx{nx}")
+    sol.save(append=f"_kovazney_nx{nx}")
+
+
+def execute_couette(nx):
+    # ── Domain ────────────────────────────────────────────────────────────────────
+    a, b   = 6, 2          # width, height
+    order  = 2             # Q9 elements
+
+    # ── Physics ───────────────────────────────────────────────────────────────────
+    rho, mu = 1.0, 1.0
+    Vw      = 1.0          # top-wall speed
+    pref = 0
+
+    def vx_analytical(x, y):
+        """Linear Couette profile."""
+        return Vw * y / b
+
+    def vy_analytical(x, y):
+        """Zero vertical velocity."""
+        return np.zeros_like(np.asarray(y, dtype=float))
+
+    def gradv_analytical(x,y):
+        """velocity gradient"""
+        return np.array([[0, Vw/b],
+                         [0, 0]])
+    
+    def p_analytical(x, y):
+        """Uniform reference pressure."""
+        return np.ones_like(x)*pref
+    ny = nx
+
+    
+    # ── Boundary conditions ───────────────────────────────────────────────────────
+    top = BoundaryCondition(
+        name="moving-top-wall",
+        boundary_key="top",
+        type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value= (Vw, 0),
+        apply_strong=True,
+        metadata={"Vx": Vw, "Vy": 0},
+    )
+    bottom = BoundaryCondition(
+        name="no-slip",
+        boundary_key="bottom",
+        type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value=(0.0, 0.0),
+        apply_strong=True,
+        metadata={"note": "no-slip"},
+    )
+    right = BoundaryCondition(
+        name="outlet-stressfree",
+        boundary_key="right",
+        type=BCType.NEUMANN,
+        variable=BCVar.TRACTION,
+        value = (0.0, 0.0),
+        apply_strong=False,
+        metadata={"description": "do-nothing / traction-free outlet"},
+    )
+    left = BoundaryCondition(
+        name="inlet-stressfree",
+        boundary_key="left",
+        type=BCType.NEUMANN,
+        variable=BCVar.TRACTION,
+        value = (0.0, 0.0),
+        apply_strong=False,
+        metadata={"description": "do-nothing / traction-free inlet"},
+    )
+    # ── Solve ─────────────────────────────────────────────────────────────────────
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
+    sol.setup_physics(rho, mu)
+    sol.setup_boundary_conditions([bottom, top, left, right],
+                                  pref_corner_id=0, pref_value=pref)
+    
+    nonlinear_options = {'tol': 1e-10}
+    sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=nonlinear_options)
+    
+    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+    sol.save(append=f"_couette_nx{nx}")
+
+
+def execute_poiseuille(nx):
+    ny = nx
+    
+    # ── Domain ────────────────────────────────────────────────────────────────────
+    a, b   = 6, 2          # width, height
+    order  = 2             # Q9 elements
+
+    # ── Physics ───────────────────────────────────────────────────────────────────
+    rho, mu = 1.0, 1.0
+    
+    # ── Pressure values ───────────────────────────────────────────────────────────
+    p_in  = 10.0
+    p_out = 4.0
+    dPdx  = (p_out - p_in) / a    # pressure gradient (< 0 → flow in +x)
+    
+    # ── Pressure values ───────────────────────────────────────────────────────────
+    def vx_analytical(x, y):
+        """Parabolic Poiseuille profile."""
+        return (-1.0 / (2.0 * mu)) * dPdx * y * (b - y)
+
+    def vy_analytical(x, y):
+        """Zero vertical velocity."""
+        return np.zeros_like(np.asarray(y, dtype=float))
+    def gradv_analytical(x,y):
+        return np.array([[0, (-1.0 / (2.0 * mu)) * dPdx*(b - 2*y)],
+                         [0, 0]])
+    def p_analytical(x, y):
+        """Linear pressure from inlet to outlet."""
+        return p_in + dPdx * np.asarray(x, dtype=float)
+
+    
+    # ── Boundary conditions ───────────────────────────────────────────────────────
+    top = BoundaryCondition(
+        name="no-slip-top",
+        boundary_key="top",
+        type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value=(0.0, 0.0),
+        apply_strong=True,
+        metadata={"note": "no-slip top wall"},
+    )
+    bottom = BoundaryCondition(
+        name="no-slip-bottom",
+        boundary_key="bottom",
+        type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value=(0.0, 0.0),
+        apply_strong=True,
+        metadata={"note": "no-slip bottom wall"},
+    )
+    left = BoundaryCondition(
+        name="pressure-inlet",
+        boundary_key="left",
+        type=BCType.NEUMANN,
+        variable=BCVar.PRESSURE,
+        value=p_in,
+        apply_strong=False,
+        metadata={"p": p_in},
+    )
+    right = BoundaryCondition(
+        name="pressure-outlet",
+        boundary_key="right",
+        type=BCType.NEUMANN,
+        variable=BCVar.PRESSURE,
+        value=p_out,
+        apply_strong=False,
+        metadata={"p": p_out},
+    )
+
+    # ── Solve ─────────────────────────────────────────────────────────────────────
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
+    sol.setup_physics(rho, mu)
+    sol.setup_boundary_conditions([bottom, top, left, right])
+    
+    nonlinear_options = {'tol': 1e-10}
+    sol.solve_steadystate(u0=1, p0=p_in, nonlinear_solver_options=nonlinear_options)
+    
+    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+    sol.save(append=f"_poiseuille_nx{nx}")
+
+
 
 
 
@@ -109,13 +275,12 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution'):
     
     for i,name in enumerate(file_list):
         arrays, scalars = load_solution_hdf5(fp / name)
+
         convergence_data[i] = scalars['Ne'], scalars['L2_velocity_norm'], scalars['H1_norm'], scalars['L2_pressure_norm']
-        # h = (x_domain[1] - x_domain[0])/(2*scalars['Ne'] + 1)
-        # print(h)
-        # convergence_data[i] = h, scalars['H1_norm'], scalars['L2_velocity_norm'], scalars['L2_pressure_norm']
 
     
     convergence_data = convergence_data[convergence_data[:, 0].argsort()]
+    convergence_data = convergence_data[convergence_data[:, 0].argsort()][::-1]
     
     fig1, ax1 = plt.subplots()
     
@@ -149,7 +314,7 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution'):
     
     ax1.legend()
 
-    ax1.set_xlabel("Number of Elements")
+    ax1.set_xlabel("Number of elements")
     ax1.set_ylabel("$||\\mathbf{v} - \\mathbf{v}_*||_{H^1(\\Omega)}$")
     ax1.set_title("Spatial Computational Complexity")
     fig1.tight_layout()
@@ -185,12 +350,17 @@ def print_convergence_table(results):
 
 
 if __name__ == '__main__':
-    # nx_list = [4, 8, 16, 20, 24, 30, 40]
-    # # nx_list = [40]
+    # # nx_list = [4, 8, 16, 20, 24, 30, 40]
+    # nx_list = [4, 8, 16, 20, 24]
+    # # nx_list = [4]
     # for nx in nx_list:
-    #     execute(nx)
+    #     # execute_kovazney(nx)
+    #     # execute_couette(nx)
+    #     execute_poiseuille(nx)
 
-    pattern = "NavierStokes_steady_state"
+    # pattern = "NavierStokes_steady_state*_kovazney"
+    # pattern = "NavierStokes_steady_state*_couette"
+    pattern = "NavierStokes_steady_state*_poiseuille"
     complexity_plot(pattern)
 
     plt.show()
