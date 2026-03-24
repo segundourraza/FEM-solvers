@@ -12,9 +12,9 @@ from matplotlib.collections import LineCollection
  
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-from scipy.sparse import csc_matrix, bmat, csr_matrix, block_diag
+from scipy.sparse import bmat, csr_matrix, block_diag
 
-from ._bcs import BoundaryCondition, BCVar, BCType, SegmentsList, PressureReferenceNode, SegmentWithElem
+from ._bcs import BoundaryCondition, BCVar, BCType, PressureReferenceNode
 
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
@@ -22,14 +22,14 @@ from .._utils import _progress_range, tqdm, NonConstantJacobian
 from .._utils._mesh import EdgesDict, group_array
 
 
-class SimulationType(Enum):
-    STEADYSTATE = auto()
-    TRANSIENT = auto()
 class BoundaryConditionSingularityWarning(Warning):
     def __init__(self, *args):
         super().__init__(*args)
 
 
+NONLINEAR_SOLVER_INT2STR = {0: 'picard',
+                            1: 'newton',
+                            2: 'continuation'}
 np.random.seed(0)
 class NavierStokesSolver():
     
@@ -81,7 +81,8 @@ class NavierStokesSolver():
     
     def __ss_preprocessing(self,v0,p0, u0 = None):
 
-        self.S11, self.S22, self.S12 = self._assemble_S_mat()        
+        self.S11, self.S22, self.S12 = self._assemble_S_mat()
+        # self.S12 = self.S12.T
         self.Q1, self.Q2 = self._assemble_Q_mat()
         if u0 is None:
             u0 = np.zeros((self.ndof,))
@@ -179,8 +180,10 @@ class NavierStokesSolver():
         self.corner_nodes = [self.__bc_dict[keys].segments[0][0][0] for keys in ['bottom', 'right', 'top', 'left']]
 
         if require_pref and pref_node is None:
-            self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[self.corner_nodes[pref_corner_id]])
-        
+            if isinstance(pref_value, (float, int)):
+                self.p_ref_node = PressureReferenceNode(float(pref_value), self.vel_2_pres_mapping[self.corner_nodes[pref_corner_id]])
+            elif isinstance(pref_value, Callable):
+                self.p_ref_node = PressureReferenceNode(pref_value(*self.__nodes[self.corner_nodes[pref_corner_id]]), self.vel_2_pres_mapping[self.corner_nodes[pref_corner_id]])
         self.__setup_bcs = True
         
 
@@ -189,24 +192,33 @@ class NavierStokesSolver():
 
     ###############################################################
     # SIMULATION EXECUTION
-    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, u0 = None, solver = 'newton', nonlinear_solver_options:dict = {}):
+    def solve_steadystate(self, v0 = 0.0, p0 = 0.0, u0 = None, solver = 'newton',
+                          nonlinear_solver_options:dict = {}):
+        
+        if isinstance(solver,str):
+            solver = solver.lower()
+            
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
         
         self.nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
 
         u0 = self.__ss_preprocessing(v0,p0, u0 = None)
-        if solver == 'picard':
+        if solver in [0,'picard']:
             _process_solver_parameter_dict(self._picards_iteration, nonlinear_solver_options)
             uSol = self._picards_iteration(0.0, u0, **self.nonlinear_solver_parameters)
-        elif solver == 'newton':
+        elif solver in [1, 'newton']:
             _process_solver_parameter_dict(self._NewtonRaphson, nonlinear_solver_options)
             uSol = self._NewtonRaphson(0.0, u0, self.residual, self.Jacobian, **self.nonlinear_solver_parameters)        
-            self.nonlinear_solver_parameters
+        elif solver in [2, 'continutation']:
+            _process_solver_parameter_dict(self._continuation_method, nonlinear_solver_options)
+            uSol = self._continuation_method(0.0, u0, **self.nonlinear_solver_parameters)
+
         else:
             raise ValueError()
+        if isinstance(solver, int):
+            solver = NONLINEAR_SOLVER_INT2STR[solver]
         self.simulation_name = f"NavierStokes_steady_state_{solver}"
-        self.__simulation_type = SimulationType.STEADYSTATE
         self.solution = uSol
         return uSol
     
@@ -461,13 +473,12 @@ class NavierStokesSolver():
             
             # convergence check (you can check norm of R or norm of delta)
             du_norm = np.linalg.norm(u_next - u_prev)
-            if verbose:
-                # print(f"Iteration {k: >{len(str(max_iter))}}: ||du||={du_norm:.3e}, fixed_dofs={len(fixed_dict)}")
-                res = self.residual(u_prev, u_next)
-                res = res[free_idx]
-                res_norm = np.linalg.norm(res)
+            res = self.residual(u_prev, u_next)
+            res = res[free_idx]
+            res_norm = np.linalg.norm(res)
+            if verbose:    
                 print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
-            if  du_norm < tol:
+            if  res_norm < tol:
                 if verbose:
                     print()
                 break
@@ -483,14 +494,14 @@ class NavierStokesSolver():
     #####################################################################
     # NEWTON-RAPHSON NON-LINEAR SOLVER
 
-    def residual(self, u_prev, u_current, )->np.ndarray:
+    def residual(self, u_prev, u_current)->np.ndarray:
         v1, v2 =  u_current[:self.vdof], u_current[self.vdof:-self.pdof]
         p = u_current[-self.pdof:]
 
         C = self._evaluate_C(u_current)
 
         # Add Neumann traction contributions into rhs here as needed
-        F = self.__apply_neumann(u=u_prev)
+        F = self.__apply_neumann(u=u_current)
 
         # COMPUTING RESIDUAL VECTOR
         R1 = C@v1 + 2*self.S11.dot(v1) + self.S22.dot(v1) + self.S12.dot(v2) - self.Q1.dot(p)
@@ -517,7 +528,7 @@ class NavierStokesSolver():
         K1v2 *= self.rho;  K2v2 *= self.rho
 
         dR1dv1 = C + K1v1 + 2*self.S11 + self.S22
-        dR1dv2 =     K2v1 + self.S12          
+        dR1dv2 =     K2v1 + self.S12        
         dR2dv1 =     K1v2 + self.S12.T        
         dR2dv2 = C + K2v2 + self.S11 + 2*self.S22
         
@@ -533,7 +544,7 @@ class NavierStokesSolver():
     
     def _NewtonRaphson(self, t_eval, u_prev, 
                        residual:Callable, jacobian:Callable,
-                       tol = 1e-8, max_iter = 10,
+                       tol = 1e-8, max_iter = 25,
                        line_search = None, relaxation_parameter = 0,
                        verbose = True, run_checks = False):
         """
@@ -563,10 +574,9 @@ class NavierStokesSolver():
         
         u_next = np.copy(u_prev)
         
+        Res = residual(u_prev, u_next)
+        Jac = jacobian(u_prev, u_next)
         for k in range(max_iter):
-            # build residual and jacobian at current iterate
-            Res = residual(u_prev, u_next)
-            Jac = jacobian(u_prev, u_next)
             if reduce_dim:
                 # Partition vectors/matrices
                 # delta_c (fixed) = prescribed - current
@@ -603,9 +613,13 @@ class NavierStokesSolver():
                 print(f"\t Jacobian relative error = {j_res:.4e}")
 
             res_norm = np.linalg.norm(R_f)
-            
             u_next = update_rule(u_prev, u_next, delta, res_norm)
 
+            # build residual and jacobian at updated iterate
+            Res = residual(u_prev, u_next)
+            Jac = jacobian(u_prev, u_next)
+            res_norm = np.linalg.norm(Res[free_idx])
+                
             # enforce fixed DOFs exactly (remove roundoff)
             for dof, pres in fixed_dict.items():
                 u_next[dof] = pres
@@ -613,7 +627,7 @@ class NavierStokesSolver():
             # convergence check
             du_norm = np.linalg.norm(delta[free_idx])
             if verbose:
-                print(f"Iteration: {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
+                print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
             if res_norm < tol and du_norm < tol:
                 if verbose:
                     print()
@@ -661,7 +675,18 @@ class NavierStokesSolver():
         else:
             raise RuntimeError(f"Finite Difference Jacobian Check Failed. eps ({eps}) != residual ({res})")
 
+    
 
+    #####################################################################
+    # CONTINUATION METHOD NON-LINEAR SOLVER
+    def _continuation_method(self, t_eval, u_prev,
+                             tol_picard = 1e-1, max_iter_picard = 25,
+                             tol_newton = 1e-8, max_iter_newton = 10,
+                             line_search = None, relaxation_parameter = 0,
+                             verbose = True, run_checks = False):
+        uSol = self._picards_iteration(0.0, u_prev, tol = tol_picard, max_iter=max_iter_picard, relaxation_parameter=relaxation_parameter, verbose=verbose)
+        uSol = self._NewtonRaphson(0.0, uSol, self.residual, self.Jacobian, tol=tol_newton, max_iter=max_iter_newton, line_search=line_search, relaxation_parameter=relaxation_parameter, verbose=verbose,run_checks=run_checks)
+        return uSol
     
     #####################################################################
     # AUXILIARY FUNCTIONS
@@ -800,46 +825,39 @@ class NavierStokesSolver():
         directory.mkdir(parents=True, exist_ok=True)
         filepath = directory / filename
 
-        if self.__simulation_type == SimulationType.STEADYSTATE:
-            with h5py.File(filepath, "w") as f:
-                sol_grp = f.create_group("solution")
-                
-                # -----------------
-                # Save arrays
-                # -----------------
-                arr_grp = sol_grp.create_group("arrays")
-                for name, array in zip(['vx', 'vy', 'p', 'p2_nodes', 'p1_nodes', 'connectivity'], [*self.get_solution(),  self.p2_nodes, self.p1_nodes, self.__velocity_connectivity]):
-                    arr_grp.create_dataset(
-                        name,
-                        data=array,
-                        compression="gzip",
-                        compression_opts=4,
-                        shuffle=True
-                )
+        with h5py.File(filepath, "w") as f:
+            sol_grp = f.create_group("solution")
+            
+            # -----------------
+            # Save arrays
+            # -----------------
+            arr_grp = sol_grp.create_group("arrays")
+            for name, array in zip(['vx', 'vy', 'p', 'p2_nodes', 'p1_nodes', 'connectivity'], [*self.get_solution(),  self.p2_nodes, self.p1_nodes, self.__velocity_connectivity]):
+                arr_grp.create_dataset(
+                    name,
+                    data=array,
+                    compression="gzip",
+                    compression_opts=4,
+                    shuffle=True
+            )
 
 
-                # -----------------
-                # Save scalars
-                # -----------------
-                scal_grp = sol_grp.create_group("scalars")
-                for name, value in zip(['Ne', 'vdof', 'pdof'], [self.__Nele, self.vdof, self.pdof]):
-                    scal_grp.create_dataset(name, data=value)
+            # -----------------
+            # Save scalars
+            # -----------------
+            scal_grp = sol_grp.create_group("scalars")
+            for name, value in zip(['Ne', 'vdof', 'pdof'], [self.__Nele, self.vdof, self.pdof]):
+                scal_grp.create_dataset(name, data=value)
 
-                if hasattr(self, 'H1_norm'):
-                    scal_grp.create_dataset('H1_norm', data=self.H1_norm)
-                
-                if hasattr(self, 'L2_velocity_norm'):
-                    scal_grp.create_dataset('L2_velocity_norm', data=self.L2_velocity_norm)
-                
-                if hasattr(self, 'L2_pressure_norm'):
-                    scal_grp.create_dataset('L2_pressure_norm', data=self.L2_pressure_norm)
-                
-                # -----------------
-                # Save metadata
-                # -----------------
-                sol_grp.attrs["saved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
-        else:
-            raise RuntimeError()
+            if hasattr(self, 'H1_norm'): scal_grp.create_dataset('H1_norm', data=self.H1_norm)
+            if hasattr(self, 'H1_seminorm'): scal_grp.create_dataset('H1_seminorm', data=self.H1_seminorm)
+            if hasattr(self, 'L2_velocity_norm'): scal_grp.create_dataset('L2_velocity_norm', data=self.L2_velocity_norm)
+            if hasattr(self, 'L2_pressure_norm'):scal_grp.create_dataset('L2_pressure_norm', data=self.L2_pressure_norm)
+            
+            # -----------------
+            # Save metadata
+            # -----------------
+            sol_grp.attrs["saved_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
             
         print("Simulation successfully saved as : {}\n".format(filepath))
 
@@ -863,7 +881,7 @@ class NavierStokesSolver():
 
         L2_pressure_norm = 0
         L2_velocity_norm = 0
-        H1_norm = 0
+        H1_seminorm = 0
         r = 4
 
         for con in self.connectivity:    
@@ -882,13 +900,11 @@ class NavierStokesSolver():
                 # L2 terms
                 vx_q = np.dot(vx[con], psi_hat)
                 vy_q = np.dot(vy[con], psi_hat)
-                L2_contribution = ((vx_q - vx_analytical(*coord))**2 + (vy_q - vy_analytical(*coord))**2)*detJ*wi
-                
-                L2_velocity_norm += L2_contribution
+                L2_velocity_norm += ((vx_q - vx_analytical(*coord))**2 + (vy_q - vy_analytical(*coord))**2)*detJ*wi
 
                 # H1 seminorm
-                gradv = [vx[con], vy[con]] @ grad_psi
-                H1_norm += np.linalg.norm(gradv - gradv_analytical(*coord), ord = 'fro')*detJ*wi
+                gradv = [vx[con], vy[con]]@grad_psi
+                H1_seminorm += np.linalg.norm(gradv - gradv_analytical(*coord), ord = 'fro')**2*detJ*wi
         
         for con in self.__pressure_connectivity:
             # Gauss-Legendre Quadrature
@@ -903,7 +919,8 @@ class NavierStokesSolver():
                 L2_pressure_norm += (pq - p_analytical(*coord))**2*detJ*wi
 
         self.L2_velocity_norm = np.sqrt(L2_velocity_norm)
-        self.H1_norm = np.sqrt(L2_velocity_norm + H1_norm)
+        self.H1_seminorm = np.sqrt(H1_seminorm)
+        self.H1_norm = np.sqrt(L2_velocity_norm + H1_seminorm)
         self.L2_pressure_norm = np.sqrt(L2_pressure_norm)
         return self.H1_norm, self.L2_velocity_norm, self.L2_pressure_norm
 

@@ -259,9 +259,9 @@ class _LegendreElement2D(ABC):
             grad_psi_hat = self.grad_basis_functions(xi,eta)
             jac = self.jacobian(nodes[con], xi, eta)
             detJ = np.linalg.det(jac)
-            invJ = np.array([[jac[1,1], -jac[1,0]],
+            invJ_T = np.array([[jac[1,1], -jac[1,0]],
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
             S11[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,0])*detJ*wi
             S22[np.ix_(con,con)] += np.outer(grad_psi[:,1], grad_psi[:,1])*detJ*wi
             S12[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,1])*detJ*wi
@@ -273,9 +273,9 @@ class _LegendreElement2D(ABC):
             grad_psi_hat = self.grad_basis_functions(xi, eta)
             jac = self.jacobian(nodes[con], xi, eta)
             detJ = np.linalg.det(jac)
-            invJ = np.array([[jac[1,1], -jac[1,0]],
+            invJ_T = np.array([[jac[1,1], -jac[1,0]],
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
             
             Vh = np.dot(Ve, psi_hat)
             C_global[np.ix_(con,con)] += np.outer(psi_hat, np.dot(grad_psi, Vh))*detJ*wi
@@ -288,9 +288,9 @@ class _LegendreElement2D(ABC):
             grad_psi_hat = self.grad_basis_functions(xi, eta)
             jac = self.jacobian(nodes[con], xi, eta)
             detJ = np.linalg.det(jac)
-            invJ = np.array([[jac[1,1], -jac[1,0]],
+            invJ_T = np.array([[jac[1,1], -jac[1,0]],
                              [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
+            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
             
             dvdx = grad_psi[:, 0] @ ve_x[con]
             dvdy = grad_psi[:, 1] @ ve_y[con]
@@ -352,9 +352,9 @@ class LinearTriangularElement(_LegendreElement2D):
         dy31 = y3 - y1
         
         detJ = dy31*dx21 - dx31*dy21
-        invJ = 1/detJ*np.array([[dy31, -dx31],
+        invJ_T = 1/detJ*np.array([[dy31, -dx31],
                                 [-dy21, dx21]])
-        return detJ, invJ
+        return detJ, invJ_T
     
     
 class LinearRectElement(_LegendreElement2D):

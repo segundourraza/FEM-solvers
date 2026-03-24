@@ -16,6 +16,7 @@ nx=ny =12
 x_domain = [-0.5, 1.0]
 y_domain = [-0.5, 1.5]
 nx = ny = 4 # elements per direction
+# nx = ny = 4 # elements per direction
 # factor = 4
 # nx*= factor
 # ny*= factor
@@ -32,7 +33,7 @@ b = y_domain[1] - y_domain[0]
 order  = 2             # Q9 elements
 
 # ── Physics ───────────────────────────────────────────────────────────────────
-Re = rho = 40.0
+Re = rho = 1.0 # 100.0
 mu = 1.0
 
 
@@ -73,12 +74,13 @@ def fig_generator():
 figs1, ax1, xl1, yl1 = fig_generator()
 figs2, ax2, xl2, yl2 = fig_generator()
 figs3, ax3, xl3, yl3 = fig_generator()
+figs4, ax4, xl4, yl4 = fig_generator()
 
 
 target_x_station =  [-0.125, 0.25, 0.625]
 target_y_station =  [0.0,    0.5,  1.0]
-
-
+target_y_station =  [0.0,  0.25, -0.25]
+target_y_station =  [0.0,1.0]
 
 y_fine = np.linspace(*y_domain, 100)
 x_fine = np.linspace(*x_domain, 100)
@@ -88,12 +90,25 @@ for j, xs in enumerate(target_x_station):
     ax1[j].set_xlabel('$v_x(y)$')
     ax1[j].set_ylabel('$y$', rotation=0, labelpad=10)
     ax1[j].grid()
+    figs1[j].tight_layout()
 
     xl1[0] = min(xl1[0], ax1[j].get_xlim()[0])
     xl1[1] = max(xl1[1], ax1[j].get_xlim()[1])
-    
     yl1[0] = min(yl1[0], ax1[j].get_ylim()[0])
     yl1[1] = max(yl1[1], ax1[j].get_ylim()[1])
+
+    
+    ax4[j].set_title(f'$x={xs:.2f}$')
+    ax4[j].plot(y_fine, vy_analytical(xs, y_fine), 'r', lw=2, label='Analytical')
+    ax4[j].set_xlabel('$y$')
+    ax4[j].set_ylabel('$v_y(y)$', rotation=0, labelpad=10)
+    ax4[j].grid()
+    figs4[j].tight_layout()
+
+    xl4[0] = min(xl4[0], ax4[j].get_xlim()[0])
+    xl4[1] = max(xl4[1], ax4[j].get_xlim()[1])
+    yl4[0] = min(yl4[0], ax4[j].get_ylim()[0])
+    yl4[1] = max(yl4[1], ax4[j].get_ylim()[1])
 
 for j, ys in enumerate(target_y_station):
     ax2[j].plot(x_fine,vx_analytical(x_fine, ys), 'r', lw=2, label='Analytical')
@@ -108,7 +123,7 @@ for j, ys in enumerate(target_y_station):
     yl2[0] = min(yl2[0], ax2[j].get_ylim()[0])
     yl2[1] = max(yl2[1], ax2[j].get_ylim()[1])
 
-    ax3[j].plot(x_fine,vy_analytical(x_fine, ys), 'r', lw=2, label='Analytical')
+    ax3[j].plot(x_fine, vy_analytical(x_fine, ys), 'r', lw=2, label='Analytical')
     ax3[j].set_title(f'$y={ys:.2f}$')
     ax3[j].set_xlabel('$x$')
     ax3[j].set_ylabel('$v_y$', rotation=0, labelpad=10)
@@ -127,9 +142,10 @@ linestyles = ['--', '-', '-.']
 
 factor_list = [1, 4, 8]
 factor_list = [4]
-fig4, ax4 = plt.subplots(1,len(factor_list))
+# factor_list = [1]
+fig5, ax5 = plt.subplots(1,len(factor_list))
 if len(factor_list) == 1:
-    ax4 = [ax4]
+    ax5 = [ax5]
 
 for i,factor in enumerate(factor_list):
     sol = NavierStokesSolver.uniform_rectangular_domain_rect(
@@ -139,7 +155,8 @@ for i,factor in enumerate(factor_list):
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions([bottom, top, left, right],
                                 pref_corner_id=corner_id, pref_value=p_analytical(x_domain[0], y_domain[0]))
-    sol.solve_steadystate(u0=1, p0=pref)
+    sol.solve_steadystate(u0=1, p0=pref,
+                          solver=2)
 
     sol_vx, sol_vy, sol_p = sol.get_solution()
     
@@ -159,31 +176,32 @@ for i,factor in enumerate(factor_list):
     sol_x_stations = {k:v for k,v in sol.group_by_x().items() if k in target_x_station}
     sol_y_stations = {k:v for k,v in sol.group_by_y().items() if k in target_y_station}
     #################################################
-    # y vs vx
-    for j, (xs, con) in enumerate(sol_x_stations.items()):
+    # vx and vy vs y
+    for xs, con in sol_x_stations.items():
+        j = next(i for i,_ in enumerate(target_x_station) if np.isclose(_,xs))
         ax1[j].plot(sol_vx[con], sol.p2_nodes[con, 1], 
                 'k', marker=markers[i], linestyle=linestyles[i],
                 ms=8, markerfacecolor='none',
                 label = f'FEM: Q9 {nx*factor} x {ny*factor}')
-
-    ############################################################
-    # vx vs x
-    for j, (ys, con) in enumerate(sol_y_stations.items()):
-        ax2[j].plot(sol.p2_nodes[con, 0], sol_vx[con], 
+        
+        ax4[j].plot(sol.p2_nodes[con, 1], sol_vy[con], 
                 'k', marker=markers[i], linestyle=linestyles[i],
                 ms=8, markerfacecolor='none',
                 label = f'FEM: Q9 {nx*factor} x {ny*factor}')
 
     ############################################################
-    # vy vs x
-    for j, (ys, con) in enumerate(sol_y_stations.items()):
+    # vx and vy vs x
+    for ys, con in sol_y_stations.items():
+        j = next(i for i,_ in enumerate(target_y_station) if np.isclose(_,ys))
+        ax2[j].plot(sol.p2_nodes[con, 0], sol_vx[con], 
+                'k', marker=markers[i], linestyle=linestyles[i],
+                ms=8, markerfacecolor='none',
+                label = f'FEM: Q9 {nx*factor} x {ny*factor}')
+        
         ax3[j].plot(sol.p2_nodes[con, 0], sol_vy[con], 
                 'k', marker=markers[i], linestyle=linestyles[i],
                 ms=8, markerfacecolor='none',
-                label = f'FEM: Q9 {nx} x {ny}')
-
-
-
+                label = f'FEM: Q9 {nx*factor} x {ny*factor}')
 
     ##############################################################################
     # STREAMLINES
@@ -206,15 +224,16 @@ for i,factor in enumerate(factor_list):
     Ui = griddata((x, y), u, (Xi, Yi), method='linear')
     Vi = griddata((x, y), v, (Xi, Yi), method='linear')
 
-    sol.plot_mesh(ax=ax4[i], plot_nodes=False)
-    ax4[i].streamplot(Xi, Yi, Ui, Vi, 
+    sol.plot_mesh(ax=ax5[i], plot_nodes=False)
+    ax5[i].streamplot(Xi, Yi, Ui, Vi, 
                     color = 'b',
-                    linewidth = 0.75,
+                    linewidth = 1.25,
                     broken_streamlines=False, 
-                    density = 1,
+                    density = 0.9,
                     )
 
-
+    
+    
 ax1[-1].legend(fontsize=11)
 for a in ax1:
     a.set_xlim(xl1); a.set_ylim(yl1)
@@ -224,18 +243,34 @@ ax2[-1].legend(fontsize=11)
 ax3[-1].legend(fontsize=11)
 
 
-plt.close('all')
+for f in figs1:
+    plt.close(f)
+for f in figs2:
+    plt.close(f)
+for f in figs3:
+    plt.close(f)
+for f in figs4:
+    plt.close(f)
 
-fig, ax = plt.subplots()
+# # plt.close('all')
 
-y_target = 0.0
-nodes   = sol.p1_nodes
-top_idx = np.where(np.abs(nodes[:, 1] - y_target) < 1e-10)[0]
-ax.plot(sol.p1_nodes[top_idx, 0], sol_p[top_idx], 
-        'k', marker=markers[i], linestyle=linestyles[i],
-        ms=8, markerfacecolor='none',
-        label = f'FEM: Q9 {nx} x {ny}')
-ax.plot(x_fine,p_analytical(x_fine, y_target), 'r', lw=2, label='Analytical')
-ax.set_yscale('log')
-print(p_analytical(*sol.p1_nodes[top_idx].T)/sol_p[top_idx])
+# fig, ax = plt.subplots()
+
+# y_target = 0.0
+# nodes   = sol.p1_nodes
+# top_idx = np.where(np.abs(nodes[:, 1] - y_target) < 1e-10)[0]
+# ax.plot(sol.p1_nodes[top_idx, 0], sol_p[top_idx], 
+#         'k', marker=markers[i], linestyle=linestyles[i],
+#         ms=8, markerfacecolor='none',
+#         label = f'FEM: Q9 {nx} x {ny}')
+# ax.plot(x_fine,p_analytical(x_fine, y_target), 'r', lw=2, label='Analytical')
+# ax.set_yscale('log')
+# print(p_analytical(*sol.p1_nodes[top_idx].T)/sol_p[top_idx])
+
+
+
+
+
+
+
 plt.show()

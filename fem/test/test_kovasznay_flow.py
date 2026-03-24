@@ -44,8 +44,7 @@ class TestKovasznayFlow(unittest.TestCase):
         cls.b = cls.y_domain[1] - cls.y_domain[0]   # 2.0
 
         # ── Physics ──────────────────────────────────────────────────────
-        cls.Re  = 40.0
-        cls.rho = 40.0
+        cls.Re  = cls.rho = 100.0
         cls.mu  = 1.0
 
         cls.pref      = 10.0
@@ -85,9 +84,9 @@ class TestKovasznayFlow(unittest.TestCase):
         sol.setup_boundary_conditions(
             [bottom, top, left, right],
             pref_corner_id=cls.corner_id,
-            pref_value=0.5*(cls.pref - np.exp(2.0 * cls.lam * cls.x_domain[0])),
+            pref_value=0.5*(cls.pref - np.exp(2.0 * cls.lam * cls.x_domain[0]))*cls.rho,
         )
-        sol.solve_steadystate(u0=1, p0=cls.pref)
+        sol.solve_steadystate(u0=1, p0=cls.pref, solver=2)
 
         cls.sol     = sol
         cls.sol_vx, cls.sol_vy, cls.sol_p = sol.get_solution()
@@ -102,7 +101,7 @@ class TestKovasznayFlow(unittest.TestCase):
         return (self.lam / (2.0 * np.pi)) * np.exp(self.lam * x) * np.sin(2.0 * np.pi * y)
 
     def p_analytical(self, x, y):
-        return 0.5*(self.pref - np.exp(2.0 * self.lam * x))
+        return 0.5*(self.pref - np.exp(2.0 * self.lam * x))*self.rho
 
     # ------------------------------------------------------------------ #
     #  Tests                                                               #
@@ -138,6 +137,18 @@ class TestKovasznayFlow(unittest.TestCase):
             self.sol_vy, expected,
             rtol=1e-4, atol=1e-4,
             err_msg="vy deviates from the analytical Kovasznay profile.",
+        )
+        
+    def test_p_matches_analytical(self):
+        """
+        p must match  0.5*(pref - np.exp(2*lam*x))*rho at every pressure node.
+        """
+        nodes    = self.sol.p1_nodes
+        expected = self.p_analytical(nodes[:, 0], nodes[:, 1])
+        np.testing.assert_allclose(
+            self.sol_p, expected,
+            rtol=1e-4, atol=1e-4,
+            err_msg="p deviates from the analytical Kovasznay profile.",
         )
 
     def test_vx_l2_error(self):
