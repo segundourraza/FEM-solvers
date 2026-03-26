@@ -11,7 +11,7 @@ plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
                      'mathtext.fontset': 'cm'})
 
 
-def execute_couette(nx):
+def execute_couette(nx, alpha):
     # ── Domain ────────────────────────────────────────────────────────────────────
     a, b   = 6, 2          # width, height
     order  = 2             # Q9 elements
@@ -78,7 +78,7 @@ def execute_couette(nx):
         metadata={"description": "do-nothing / traction-free inlet"},
     )
     # ── Solve ─────────────────────────────────────────────────────────────────────
-    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, alpha=alpha)
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions([bottom, top, left, right],
                                   pref_corner_id=0, pref_value=pref)
@@ -90,8 +90,7 @@ def execute_couette(nx):
     print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_couette_nx{nx}")
 
-
-def execute_poiseuille(nx):
+def execute_poiseuille(nx, alpha):
     ny = nx
     
     # ── Domain ────────────────────────────────────────────────────────────────────
@@ -172,7 +171,8 @@ def execute_poiseuille(nx):
     print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_poiseuille_nx{nx}")
 
-def execute_divfree(nx):
+
+def execute_divfree(nx, alpha):
     a = b = np.pi
     
     order  = 2             # Q9 elements
@@ -238,7 +238,7 @@ def execute_divfree(nx):
     print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_mms_nx{nx}")
 
-def execute_kovazney(nx):
+def execute_kovazney(nx, alpha):
     x_domain = [-0.5, 1.0]
     y_domain = [-0.5, 1.5]
 
@@ -488,20 +488,23 @@ def print_convergence_table(results):
 
 
 if __name__ == '__main__':
+    alpha = 0.25
+    
     SOLVER = 0
     NONLINEAR_OPTIONS = {'tol': 1e3,
                          'verbose' : True}
     
-    SOLVER = 2
-    NONLINEAR_OPTIONS = {'tol_newton': 1e-8,
-                         'verbose' : True}
+    # SOLVER = 2
+    # NONLINEAR_OPTIONS = {'tol_newton': 1e-8,
+    #                      'verbose' : True}
     
     nx_list = [6, 8, 16, 20, 24]
-    nx_list = [8, 16, 20, 24, 30]
-    nx_list = [40]
+    nx_list = [6, 8, 16]
+    # nx_list = [8, 16, 20, 24, 30]
+    # nx_list = [40]
     for nx in nx_list:
-        # execute_couette(nx)
-        # pattern = "NavierStokes_steady_state*_couette"
+        execute_couette(nx, alpha)
+        pattern = "NavierStokes_steady_state*_couette"
 
         # execute_poiseuille(nx)
         # pattern = "NavierStokes_steady_state*_poiseuille"
@@ -509,8 +512,8 @@ if __name__ == '__main__':
         # execute_divfree(nx)
         # pattern = "NavierStokes_steady_state*_mms"
     
-        execute_kovazney(nx)
-        pattern = "NavierStokes_steady_state*_kovazney"
+        # execute_kovazney(nx, alpha)
+        # pattern = "NavierStokes_steady_state*_kovazney"
     
     
     complexity_plot(pattern)

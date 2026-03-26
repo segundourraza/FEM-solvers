@@ -19,7 +19,7 @@ from ._bcs import BoundaryCondition, BCVar, BCType, PressureReferenceNode
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
-from .._utils._mesh import EdgesDict, group_array
+from .._utils._mesh import EdgesDict, group_array, perturb_interior_nodes
 
 
 class BoundaryConditionSingularityWarning(Warning):
@@ -110,12 +110,15 @@ class NavierStokesSolver():
                                         h2: float = None,
                                         order: int = 2,
                                         origin: Tuple[float,float] = (0.0, 0.0),
+                                        alpha = None,
                                         element: str = 'complete'):
         """
         Generate a 2D rectangular mesh of a rectangle height x width.
         """    
         nodes, connectivity = generate_uniform_rect_mesh(nx=nx, ny=ny, width=width, h1=h1, h2=h2, order=order, element=element, origin=origin)
         boundary_edges = boundary_edges_connectivity(connectivity, nx, ny, order=order, element=element)
+        if alpha is not None:
+            perturb_interior_nodes(nodes, alpha, [_ for edge in boundary_edges.values() for _e in edge for _ in _e[0]])
         return cls(nodes=nodes, connectivity=connectivity, boundary_edges=boundary_edges)
     
     @classmethod
@@ -236,19 +239,13 @@ class NavierStokesSolver():
             self.velocity_element.Se(self.__nodes, con, S11, S22, S12)
         return S11*self.mu, S22*self.mu, S12*self.mu
     
-    def _assemble_Q_mat(self,r=2):
+    def _assemble_Q_mat(self,r=4):
         Q1 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
         Q2 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
         for con_v, con_p in zip(self.__velocity_connectivity, self.__pressure_connectivity):
             for (xi,eta), wi in zip(*self.velocity_element.quadrature_points(r)):
                 # VELOCITY FINITE ELEMENT
-                grad_psi_hat = self.velocity_element.grad_basis_functions(xi,eta)
-                jac = self.velocity_element.jacobian(self.__nodes[con_v], xi, eta)
-                detJ = jac[0,0]*jac[1,1] - jac[1,0]*jac[0,1]
-                invJ = np.array([[jac[1,1], -jac[1,0]],
-                                [-jac[0,1], jac[0,0]]])*(1/detJ)
-                grad_psi = grad_psi_hat@invJ # Map grad of shape function back to physical coordinates
-
+                *_, detJ, grad_psi = self.velocity_element.properties(self.__nodes[con_v], xi, eta)                
                 # PRESSURE FINITE ELEMENT
                 phi = self.pressure_element.basis_functions(xi, eta)
 
@@ -268,9 +265,7 @@ class NavierStokesSolver():
         if self.__forcing_func is not None:
             for con in self.__velocity_connectivity:
                 for (xi,eta), wi in zip(*self.velocity_element.quadrature_points(self.velocity_element.r_viscous)):
-                    psi_hat = self.velocity_element.basis_functions(xi,eta)
-                    jac = self.velocity_element.jacobian(self.__nodes[con,:], xi, eta)
-                    detJ = np.linalg.det(jac)
+                    psi_hat, _, detJ, _ = self.velocity_element.properties(self.__nodes[con], xi, eta)
                     
                     coords = psi_hat.T @ self.__nodes[con,:]
                     df = self.__forcing_func(*coords)*detJ*wi
@@ -457,6 +452,7 @@ class NavierStokesSolver():
             if reduce_dim:
                 # Build reduced system
                 C = self._evaluate_C(u_prev)
+                C *= 0
 
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
@@ -712,8 +708,9 @@ class NavierStokesSolver():
 
 
         if self.velocity_element.n == 9:
-            for e, con in enumerate(self.__velocity_connectivity):
-                temp = np.vstack([self.__nodes[con[:4]],self.__nodes[con[0]]]).T
+            idx = [0, 4, 1, 5, 2, 6, 3, 7, 0]
+            for e, con in enumerate(self.__velocity_connectivity):                
+                temp = self.__nodes[con[idx]].T
                 ax.plot(*temp, '-', color = color, linewidth= linewidth)
         else:
             for e, con in enumerate(self.__velocity_connectivity):

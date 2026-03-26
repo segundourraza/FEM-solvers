@@ -253,15 +253,21 @@ class _LegendreElement2D(ABC):
     
     def detJ(self, nodes, xi, eta):
         return np.linalg.det(self.jacobian(nodes, xi, eta))
-   
+    
+    def properties(self, nodes, xi, eta):
+        psi_hat = self.basis_functions(xi, eta)
+        grad_psi_hat = self.grad_basis_functions(xi,eta)
+        jac = self.jacobian(nodes, xi, eta)
+        detJ = np.linalg.det(jac)
+        invJ_T = np.array([[jac[1,1], -jac[1,0]],
+                           [-jac[0,1], jac[0,0]]])*(1/detJ)
+        grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
+        return psi_hat, grad_psi_hat, detJ, grad_psi
+        
+
     def Se(self, nodes, con, S11, S22, S12):
         for (xi,eta), wi in zip(*self.quadrature_points(self.r_viscous)):
-            grad_psi_hat = self.grad_basis_functions(xi,eta)
-            jac = self.jacobian(nodes[con], xi, eta)
-            detJ = np.linalg.det(jac)
-            invJ_T = np.array([[jac[1,1], -jac[1,0]],
-                             [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
+            *_, detJ, grad_psi = self.properties(nodes[con], xi, eta)
             S11[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,0])*detJ*wi
             S22[np.ix_(con,con)] += np.outer(grad_psi[:,1], grad_psi[:,1])*detJ*wi
             S12[np.ix_(con,con)] += np.outer(grad_psi[:,0], grad_psi[:,1])*detJ*wi
@@ -269,14 +275,7 @@ class _LegendreElement2D(ABC):
     def _C(self, nodes, con, C_global, ve_x, ve_y):
         Ve = np.vstack([ve_x,ve_y])
         for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
-            psi_hat = self.basis_functions(xi, eta)
-            grad_psi_hat = self.grad_basis_functions(xi, eta)
-            jac = self.jacobian(nodes[con], xi, eta)
-            detJ = np.linalg.det(jac)
-            invJ_T = np.array([[jac[1,1], -jac[1,0]],
-                             [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
-            
+            psi_hat, _, detJ, grad_psi = self.properties(nodes[con], xi, eta)
             Vh = np.dot(Ve, psi_hat)
             C_global[np.ix_(con,con)] += np.outer(psi_hat, np.dot(grad_psi, Vh))*detJ*wi
     
@@ -284,13 +283,7 @@ class _LegendreElement2D(ABC):
                ve_x, ve_y,
                C1:np.ndarray, C2:np.ndarray):
         for (xi, eta), wi in zip(*self.quadrature_points(self.r_convective)):
-            psi_hat = self.basis_functions(xi, eta)
-            grad_psi_hat = self.grad_basis_functions(xi, eta)
-            jac = self.jacobian(nodes[con], xi, eta)
-            detJ = np.linalg.det(jac)
-            invJ_T = np.array([[jac[1,1], -jac[1,0]],
-                             [-jac[0,1], jac[0,0]]])*(1/detJ)
-            grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
+            psi_hat, grad_psi_hat, detJ, grad_psi = self.properties(nodes[con], xi, eta)
             
             dvdx = grad_psi[:, 0] @ ve_x[con]
             dvdy = grad_psi[:, 1] @ ve_y[con]

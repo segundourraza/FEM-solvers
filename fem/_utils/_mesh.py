@@ -98,8 +98,6 @@ def generate_uniform_rect_mesh(nx, ny,
 
         nodes[:,0] += origin[0]
         nodes[:,1] += origin[1]
-        return nodes, np.array(conn, dtype=int)
-
     else:  # order == 2
         # refined grid: 2*nx + 1 by 2*ny + 1
         nxn = 2 * nx + 1
@@ -149,7 +147,8 @@ def generate_uniform_rect_mesh(nx, ny,
         nodes[:,0] += origin[0]
         nodes[:,1] += origin[1]
         
-        return nodes, np.array(conn, dtype=int)
+    return nodes, np.array(conn, dtype=int)
+        
 
 
 def generate_nonuniform_rect_mesh(nx: int,
@@ -349,6 +348,40 @@ def generate_nonuniform_rect_mesh(nx: int,
                     conn.append([n00, n20, n22, n02, n10, n21, n12, n01, n11])
 
         return nodes, np.asarray(conn, dtype=int)
+
+    
+def perturb_interior_nodes(nodes, alpha, boundary_nodes):
+    """
+    Apply sinusoidal perturbation to all non-boundary nodes in-place.
+
+    Parameters
+    ----------
+    nodes : np.ndarray, shape (n_nodes, 2)
+        Node coordinates, modified in-place.
+    alpha : float
+        Maximum perturbation amplitude (physical units).
+    boundary_nodes : array-like of int
+        Indices of nodes to leave untouched.
+    """
+    frozen = set(boundary_nodes)
+
+    x = nodes[:, 0]
+    y = nodes[:, 1]
+    x_min, x_max = x.min(), x.max()
+    y_min, y_max = y.min(), y.max()
+    Lx = x_max - x_min
+    Ly = y_max - y_min
+
+    for k in range(nodes.shape[0]):
+        if k in frozen:
+            continue
+
+        xi  = (x[k] - x_min) / Lx
+        eta = (y[k] - y_min) / Ly
+
+        s = np.sin(np.pi * xi) * np.sin(np.pi * eta)
+        nodes[k, 0] += alpha * s
+        nodes[k, 1] += alpha * s
 
 
 

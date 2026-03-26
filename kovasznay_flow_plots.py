@@ -151,6 +151,7 @@ for i,factor in enumerate(factor_list):
     sol = NavierStokesSolver.uniform_rectangular_domain_rect(
         nx*factor, ny*factor, 
         a, b, order=order, origin=origin,
+        alpha=0.25,
         )
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions([bottom, top, left, right],

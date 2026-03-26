@@ -86,7 +86,7 @@ class TestKovasznayFlow(unittest.TestCase):
             pref_corner_id=cls.corner_id,
             pref_value=0.5*(cls.pref - np.exp(2.0 * cls.lam * cls.x_domain[0]))*cls.rho,
         )
-        sol.solve_steadystate(u0=1, p0=cls.pref, solver=2)
+        sol.solve_steadystate(u0=1, p0=cls.pref, solver=2, nonlinear_solver_options={'verbose': False})
 
         cls.sol     = sol
         cls.sol_vx, cls.sol_vy, cls.sol_p = sol.get_solution()
