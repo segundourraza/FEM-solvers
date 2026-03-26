@@ -1,5 +1,13 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from itertools import product as iproduct
+
+plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
+                     'mathtext.fontset': 'cm'})
+
+markers    = ['o', 's', '^', 'd']
+linestyles = ['--', '-', '-.']
+styles     = list(iproduct(linestyles, markers))
 
 
 from fem import NavierStokesSolver, BoundaryCondition, BCVar, BCType
@@ -56,8 +64,22 @@ sol = NavierStokesSolver.uniform_rectangular_domain_rect(
 )
 sol.setup_physics(rho, mu)
 sol.setup_boundary_conditions([bottom, outlet, top, inlet])
-sol.solve_steadystate(u0=10, p0=100)
+sol.solve_steadystate(u0=10, p0=100, solver = 0)
 sol_vx, sol_vy, sol_p = sol.get_solution()
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ── Solve ─────────────────────────────────────────────────────────────────────
 
 def vx_analytical(x, y):
     """Linear Couette profile."""
@@ -75,15 +97,6 @@ def p_analytical(x, y):
     elif isinstance(y, (float, int)):
         return np.ones_like(np.asarray(x, dtype=float)) * ref
     return ref
-import matplotlib.pyplot as plt
-from itertools import product as iproduct
-
-plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
-                     'mathtext.fontset': 'cm'})
-
-markers    = ['o', 's', '^', 'd']
-linestyles = ['--', '-', '-.']
-styles     = list(iproduct(linestyles, markers))
 
 uni_x_clusters = sol.group_by_x()
 filtered = {k: v for k, v in uni_x_clusters.items() if k in [0.0, a]}

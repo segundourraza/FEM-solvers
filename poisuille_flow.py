@@ -81,8 +81,8 @@ nonlinear_options = {'tol': 1e-10}
 sol.solve_steadystate(u0=1, p0=p_in, nonlinear_solver_options=nonlinear_options)
 sol_vx, sol_vy, sol_p = sol.get_solution()
 
-H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
-print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
 
 # ── collect nodes at x = 0 and x = a ─────────────────────────────────────────
 uni_x   = sol.group_by_x()

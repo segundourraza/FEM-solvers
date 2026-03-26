@@ -258,6 +258,148 @@ class TestKovasznayFlow(unittest.TestCase):
             f"{self.nx}x{self.ny} Q9 mesh.",
         )
 
+class TestKovasznayConvergence(unittest.TestCase):
+    """
+    Mesh-convergence test for the Kovasznay flow benchmark.
+
+    Expected optimal rates for Q2/Q1 Taylor-Hood on quads:
+        ||u - u_h||_L2  ~ O(h^3)
+        ||p - p_h||_L2  ~ O(h^2)
+
+    We run on meshes {4, 8, 16, 32}, fit the slope in log-log space,
+    and assert the measured rate is within a tolerance of the theoretical one.
+    """
+
+    # ── Parameters ────────────────────────────────────────────────────
+    x_domain = (-0.5, 1.0)
+    y_domain = (-0.5, 1.5)
+    order    = 2
+    Re = rho = 100.0
+    mu       = 1.0
+    pref     = 10.0
+
+    mesh_sizes = [4, 8, 16, 32]
+
+    # Theoretical rates and acceptable tolerance (allow ~0.3 degradation)
+    expected_velocity_rate = 3.0
+    expected_pressure_rate = 2.0
+    rate_tolerance         = 0.4
+
+    @classmethod
+    def setUpClass(cls):
+        cls.origin = (cls.x_domain[0], cls.y_domain[0])
+        cls.a = cls.x_domain[1] - cls.x_domain[0]
+        cls.b = cls.y_domain[1] - cls.y_domain[0]
+        cls.lam = cls.Re / 2.0 - np.sqrt((cls.Re / 2.0)**2 + 4.0 * np.pi**2)
+
+        lam = cls.lam
+
+        dirichlet = BoundaryCondition(
+            name="dirichlet",
+            boundary_key="top",
+            type=BCType.DIRICHLET,
+            variable=BCVar.VELOCITY,
+            value=lambda x, y, t: (
+                1.0 - np.exp(lam * x) * np.cos(2.0 * np.pi * y),
+                (lam / (2.0 * np.pi)) * np.exp(lam * x) * np.sin(2.0 * np.pi * y),
+            ),
+            apply_strong=True,
+            metadata={"note": "exact Kovasznay Dirichlet"},
+        )
+
+        cls.h_vals     = []
+        cls.err_vx_l2  = []
+        cls.err_vy_l2  = []
+        cls.err_p_l2   = []
+
+        for n in cls.mesh_sizes:
+            sol = NavierStokesSolver.uniform_rectangular_domain_rect(
+                n, n, cls.a, cls.b,
+                order=cls.order, origin=cls.origin,
+            )
+            sol.setup_physics(cls.rho, cls.mu)
+
+            bcs = []
+            for key in ("top", "bottom", "left", "right"):
+                bc = dirichlet.copy()
+                bc.boundary_key = key
+                bcs.append(bc)
+
+            sol.setup_boundary_conditions(
+                bcs,
+                pref_corner_id=0,
+                pref_value=0.5 * (cls.pref - np.exp(2.0 * cls.lam * cls.x_domain[0])) * cls.rho,
+            )
+            sol.solve_steadystate(u0=1, p0=cls.pref, solver=2, nonlinear_solver_options={'verbose': False})
+            vx, vy, p = sol.get_solution()
+
+            # ── Velocity errors (Q2 nodes) ──
+            v_nodes = sol.p2_nodes
+            vx_ex = 1.0 - np.exp(lam * v_nodes[:, 0]) * np.cos(2.0 * np.pi * v_nodes[:, 1])
+            vy_ex = (lam / (2.0 * np.pi)) * np.exp(lam * v_nodes[:, 0]) * np.sin(2.0 * np.pi * v_nodes[:, 1])
+
+            # ── Pressure errors (Q1 nodes) ──
+            p_nodes = sol.p1_nodes
+            p_ex = 0.5 * (cls.pref - np.exp(2.0 * cls.lam * p_nodes[:, 0])) * cls.rho
+
+            h = max(cls.a / n, cls.b / n)
+            cls.h_vals.append(h)
+            cls.err_vx_l2.append(np.linalg.norm(vx - vx_ex) / np.linalg.norm(vx_ex))
+            cls.err_vy_l2.append(np.linalg.norm(vy - vy_ex) / max(np.linalg.norm(vy_ex), 1e-12))
+            cls.err_p_l2.append(np.linalg.norm(p - p_ex) / np.linalg.norm(p_ex))
+
+        cls.h_vals    = np.array(cls.h_vals)
+        cls.err_vx_l2 = np.array(cls.err_vx_l2)
+        cls.err_vy_l2 = np.array(cls.err_vy_l2)
+        cls.err_p_l2  = np.array(cls.err_p_l2)
+
+    @staticmethod
+    def _fit_rate(h, err):
+        """Least-squares fit of log(err) = rate * log(h) + const."""
+        log_h   = np.log(h)
+        log_err = np.log(err)
+        A = np.vstack([log_h, np.ones_like(log_h)]).T
+        rate, _ = np.linalg.lstsq(A, log_err, rcond=None)[0]
+        return rate
+
+    # ── Tests ─────────────────────────────────────────────────────────
+
+    def test_vx_convergence_rate(self):
+        """vx L2 error must converge at ~O(h^3) for Q2 elements."""
+        rate = self._fit_rate(self.h_vals, self.err_vx_l2)
+        self.assertGreater(
+            rate, self.expected_velocity_rate - self.rate_tolerance,
+            f"vx convergence rate {rate:.2f} below threshold "
+            f"{self.expected_velocity_rate - self.rate_tolerance:.1f}.",
+        )
+
+    def test_vy_convergence_rate(self):
+        """vy L2 error must converge at ~O(h^3) for Q2 elements."""
+        rate = self._fit_rate(self.h_vals, self.err_vy_l2)
+        self.assertGreater(
+            rate, self.expected_velocity_rate - self.rate_tolerance,
+            f"vy convergence rate {rate:.2f} below threshold "
+            f"{self.expected_velocity_rate - self.rate_tolerance:.1f}.",
+        )
+
+    def test_pressure_convergence_rate(self):
+        """Pressure L2 error must converge at ~O(h^2) for Q1 elements."""
+        rate = self._fit_rate(self.h_vals, self.err_p_l2)
+        self.assertGreater(
+            rate, self.expected_pressure_rate - self.rate_tolerance,
+            f"Pressure convergence rate {rate:.2f} below threshold "
+            f"{self.expected_pressure_rate - self.rate_tolerance:.1f}.",
+        )
+
+    def test_errors_monotonically_decrease(self):
+        """Errors must decrease on every refinement step."""
+        for name, errs in [("vx", self.err_vx_l2), ("vy", self.err_vy_l2), ("p", self.err_p_l2)]:
+            for i in range(1, len(errs)):
+                self.assertLess(
+                    errs[i], errs[i - 1],
+                    f"{name} error did not decrease from mesh {self.mesh_sizes[i-1]} "
+                    f"to {self.mesh_sizes[i]}: {errs[i-1]:.3e} -> {errs[i]:.3e}",
+                )
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

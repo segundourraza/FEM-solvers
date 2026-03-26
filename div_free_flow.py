@@ -9,27 +9,40 @@ plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
 
 
 # ── Domain ────────────────────────────────────────────────────────────────────
-a, b = 2, 6          # width, height
+a = b  = np.pi
+
+
 order  = 2             # Q9 elements
 nx = ny = 10
 
 # ── Physics ───────────────────────────────────────────────────────────────────
-Re = rho = 1.0 # 100.0
+Re = rho = 10.0 # 100.0
 mu = 1.0
 
 
-pref = 10
-corner_id = 0
-
 def vx_analytical(x, y):
-    return np.sin(np.pi/a*x)*np.cos(np.pi/b*y)
+    return np.sin(x)*np.cos(y)
 
 def vy_analytical(x, y):
-    return -np.cos(np.pi/a*x)*np.sin(np.pi/b*y)
+    return -np.cos(x)*np.sin(y)
+
+def gradv_analytical(x,y):
+    return np.array([[np.cos(x)*np.cos(y), -np.sin(x)*np.sin(y)],
+                        [np.sin(x)*np.sin(y), -np.cos(x)*np.cos(y)]])
 
 def p_analytical(x, y):
-    return np.sin(np.pi/a*x)*np.cos(np.pi/b*y)
-    
+    return 1/4*(np.cos(2*x) + np.cos(2*y))*rho
+
+
+def f1(x, y):
+    return 2*mu*np.sin(x)*np.cos(y)
+
+def f2(x, y):
+    return -2*mu*np.cos(x)*np.sin(y)
+
+def forcing_function(x,y):
+    return np.array([f1(x,y), f2(x,y)])
+
 
 # ── Boundary conditions ───────────────────────────────────────────────────────
 top = BoundaryCondition(
@@ -51,9 +64,10 @@ left = top.copy(); left.boundary_key = 'left'
 sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
 sol.setup_physics(rho, mu)
 sol.setup_boundary_conditions([bottom, top, left, right],
-                            pref_corner_id=corner_id, pref_value=pref)
-sol.solve_steadystate(u0=1, p0=pref,
-                        solver=2)
+                            pref_corner_id=0, pref_value=p_analytical,
+                            forcing_function=forcing_function)
+sol.solve_steadystate(u0=1, p0=0.0,
+                        solver=0)
 
 sol_vx, sol_vy, sol_p = sol.get_solution()
 
@@ -112,14 +126,16 @@ ax5.streamplot(Xi, Yi, Ui, Vi,
                 density = 0.9,
                 )
 
+L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
 
+print(np.linalg.norm(sol_vx - vx_analytical(*sol.p2_nodes.T)))
+print(np.linalg.norm(sol_vy - vy_analytical(*sol.p2_nodes.T)))
 
+print(np.linalg.norm(sol_p - p_analytical(*sol.p1_nodes.T)))
 
-
-
-res = np.linalg.norm(vx_analytical(*sol.p2_nodes.T) - sol_vx)
-print(res)
-res = np.linalg.norm(vy_analytical(*sol.p2_nodes.T) - sol_vy)
-print(res)
+fig, ax = plt.subplots()
+cf = ax.tricontourf(sol.p1_nodes[:,0], sol.p1_nodes[:,1], sol_p- p_analytical(*sol.p1_nodes.T), levels=100)
+fig.colorbar(cf, ax=ax)
 
 plt.show()

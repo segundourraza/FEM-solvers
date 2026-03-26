@@ -77,7 +77,7 @@ class TestCouetteFlow(unittest.TestCase):
             cls.nx, cls.ny, cls.a, cls.b, order=cls.order)
         sol.setup_physics(cls.rho, cls.mu)
         sol.setup_boundary_conditions([bottom, outlet, top, inlet])
-        sol.solve_steadystate(u0=10, p0=100)
+        sol.solve_steadystate(u0=10, p0=100, nonlinear_solver_options={'verbose': False})
 
         cls.sol = sol
         cls.sol_vx, cls.sol_vy, cls.sol_p = sol.get_solution()

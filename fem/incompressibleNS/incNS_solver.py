@@ -82,7 +82,6 @@ class NavierStokesSolver():
     def __ss_preprocessing(self,v0,p0, u0 = None):
 
         self.S11, self.S22, self.S12 = self._assemble_S_mat()
-        # self.S12 = self.S12.T
         self.Q1, self.Q2 = self._assemble_Q_mat()
         if u0 is None:
             u0 = np.zeros((self.ndof,))
@@ -158,8 +157,10 @@ class NavierStokesSolver():
         self.__setup_physics = True
 
     def setup_boundary_conditions(self, bc_list:Iterable[BoundaryCondition], 
-                                  pref_corner_id = 1, pref_value:float = 0.0,
-                                  pref_node:PressureReferenceNode = None):
+                                  pref_corner_id = 1, pref_value:float = 0.0, pref_node:PressureReferenceNode = None,
+                                  forcing_function:Callable = None):
+        self.__forcing_func = forcing_function
+
         self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
         require_pref = True
         for bc in self.__bc_dict.values():
@@ -195,8 +196,9 @@ class NavierStokesSolver():
     def solve_steadystate(self, v0 = 0.0, p0 = 0.0, u0 = None, solver = 'newton',
                           nonlinear_solver_options:dict = {}):
         
-        if isinstance(solver,str):
-            solver = solver.lower()
+        _solver = solver
+        if isinstance(_solver,str):
+            _solver = _solver.lower()
             
         if (not self.__setup_bcs) or (not self.__setup_physics):
             raise RuntimeError("Physics have not been set. Please use 'setup_physics' method.")
@@ -204,21 +206,21 @@ class NavierStokesSolver():
         self.nonlinear_solver_parameters = {k:v for k,v in nonlinear_solver_options.items() if v is not None}
 
         u0 = self.__ss_preprocessing(v0,p0, u0 = None)
-        if solver in [0,'picard']:
-            _process_solver_parameter_dict(self._picards_iteration, nonlinear_solver_options)
+        if _solver in [0,'picard']:
+            _process_solver_parameter_dict(self._picards_iteration, self.nonlinear_solver_parameters)
             uSol = self._picards_iteration(0.0, u0, **self.nonlinear_solver_parameters)
-        elif solver in [1, 'newton']:
-            _process_solver_parameter_dict(self._NewtonRaphson, nonlinear_solver_options)
+        elif _solver in [1, 'newton']:
+            _process_solver_parameter_dict(self._NewtonRaphson, self.nonlinear_solver_parameters)
             uSol = self._NewtonRaphson(0.0, u0, self.residual, self.Jacobian, **self.nonlinear_solver_parameters)        
-        elif solver in [2, 'continutation']:
-            _process_solver_parameter_dict(self._continuation_method, nonlinear_solver_options)
+        elif _solver in [2, 'continutation']:
+            _process_solver_parameter_dict(self._continuation_method, self.nonlinear_solver_parameters)
             uSol = self._continuation_method(0.0, u0, **self.nonlinear_solver_parameters)
 
         else:
             raise ValueError()
-        if isinstance(solver, int):
-            solver = NONLINEAR_SOLVER_INT2STR[solver]
-        self.simulation_name = f"NavierStokes_steady_state_{solver}"
+        if isinstance(_solver, int):
+            _solver = NONLINEAR_SOLVER_INT2STR[_solver]
+        self.simulation_name = f"NavierStokes_steady_state_{_solver}"
         self.solution = uSol
         return uSol
     
@@ -226,13 +228,13 @@ class NavierStokesSolver():
     ####################################################################
     # ASSEMBLE GLOBAL LINEAR SYSTEMS
     
-    def _assemble_S_mat(self,)-> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _assemble_S_mat(self)-> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         S11 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         S22 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         S12 = np.zeros((self.__N_vel_nodes, self.__N_vel_nodes))
         for con in self.__velocity_connectivity:
             self.velocity_element.Se(self.__nodes, con, S11, S22, S12)
-        return (_*self.mu for _ in [S11, S22, S12])
+        return S11*self.mu, S22*self.mu, S12*self.mu
     
     def _assemble_Q_mat(self,r=2):
         Q1 = np.zeros((self.__N_vel_nodes, self.__N_pres_nodes))
@@ -261,11 +263,19 @@ class NavierStokesSolver():
         C *= self.rho
         return C
     
-    def _assemble_F(self, u:np.ndarray):
+    def _assemble_F(self):
         F = np.zeros((self.ndof,), dtype= float)
-        for i,bc in enumerate(self.__bc_dict.values()):
-            for segment in bc.segments:
-                self._evaluate_traction(F, segment[0], u)
+        if self.__forcing_func is not None:
+            for con in self.__velocity_connectivity:
+                for (xi,eta), wi in zip(*self.velocity_element.quadrature_points(self.velocity_element.r_viscous)):
+                    psi_hat = self.velocity_element.basis_functions(xi,eta)
+                    jac = self.velocity_element.jacobian(self.__nodes[con,:], xi, eta)
+                    detJ = np.linalg.det(jac)
+                    
+                    coords = psi_hat.T @ self.__nodes[con,:]
+                    df = self.__forcing_func(*coords)*detJ*wi
+                    F[self.vx_dof(con)] += psi_hat*df[0]
+                    F[self.vy_dof(con)] += psi_hat*df[1]
         return F
     
     def _evaluate_traction(self, F:np.ndarray, con:Iterable[int], u:np.ndarray, bc:BoundaryCondition = None, t: float = None):
@@ -375,14 +385,14 @@ class NavierStokesSolver():
                             seen_dofs[self.vy_dof(node)] = key
                     else:
                         fixed[self.vy_dof(node)] = float(vy_val)
-                        seen_dofs[self.vx_dof(node)] = key
+                        seen_dofs[self.vy_dof(node)] = key
 
         return fixed
 
-    def __apply_neumann(self, u:np.ndarray, t:float = 0.0):
+    def __assemble_rhs(self, u:np.ndarray, t:float = 0.0):
         
-        F = np.zeros((self.ndof,), dtype= float)
-        for i,bc in enumerate(self.__bc_dict.values()):
+        F = self._assemble_F()
+        for bc in self.__bc_dict.values():
             if bc.type == BCType.NEUMANN and bc.active:
                 for segment in bc.segments:
                     self._evaluate_traction(F, segment[0], u, bc=bc, t=t)
@@ -390,7 +400,7 @@ class NavierStokesSolver():
     
 
         
-    def __apply_dirichlet(self, t: float = 0.0):
+    def _apply_dirichlet(self, t: float = 0.0):
 
         # Collect fixed velocity DOFs from BCs
         fixed_dict = self.__find_dirichlet_dofs(t)
@@ -426,15 +436,13 @@ class NavierStokesSolver():
             raise ValueError(f"'relaxation_parameter' must be on range (0, 1), currently equal to {relaxation_parameter}.")
         
         update_rule = lambda u, ustar: u*relaxation_parameter + (1-relaxation_parameter)*ustar
-        
         Z = csr_matrix((self.__N_pres_nodes, self.__N_pres_nodes))
         A = bmat([[2*self.S11 + self.S22,   self.S12,               -self.Q1],
                   [self.S12.T,              self.S11 + 2*self.S22,  -self.Q2],
                   [-self.Q1.T,              -self.Q2.T,             Z]], format='csc')
-        
-    
+
         # ENFORCE BCs
-        reduce_dim, fixed_dict, fixed_idx, free_idx = self.__apply_dirichlet(t_eval)
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self._apply_dirichlet(t_eval)
 
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
@@ -443,12 +451,13 @@ class NavierStokesSolver():
         for k in range(max_iter):
 
             # Add Neumann traction contributions into rhs here as needed
-            b = self.__apply_neumann(u=u_prev, t=t_eval)
+            b = self.__assemble_rhs(u=u_prev, t=t_eval)
 
             # SOLVE
             if reduce_dim:
                 # Build reduced system
                 C = self._evaluate_C(u_prev)
+
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
                 A_fc = A_full[free_idx][:,fixed_idx]          # sparse shape (#free, #fixed)
@@ -473,20 +482,22 @@ class NavierStokesSolver():
             
             # convergence check (you can check norm of R or norm of delta)
             du_norm = np.linalg.norm(u_next - u_prev)
-            res = self.residual(u_prev, u_next)
-            res = res[free_idx]
-            res_norm = np.linalg.norm(res)
+            new_res = self.residual(u_prev, u_next)[free_idx]
+            new_res_norm = np.linalg.norm(new_res)
             if verbose:    
-                print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
-            if  res_norm < tol:
-                if verbose:
-                    print()
+                print(f"Iteration {k: <{len(str(max_iter))}}: ||R||={new_res_norm:.3e}, ||du||={du_norm:.3e}, fixed_dofs={len(fixed_idx)}, free_dofs = {len(free_idx)}")
+            if new_res_norm < tol:
                 break
+            else:
+                if k > 0 and abs(res_norm-new_res_norm)< tol:
+                    break
             u_prev = u_next
+            res_norm = new_res_norm
         else:
             # if we exit loop not converged:
             warnings.warn("Picard's Iteration failed to converge after {}".format(max_iter))
-        
+        if verbose:
+            print()        
         return u_next
 
 
@@ -501,7 +512,7 @@ class NavierStokesSolver():
         C = self._evaluate_C(u_current)
 
         # Add Neumann traction contributions into rhs here as needed
-        F = self.__apply_neumann(u=u_current)
+        F = self.__assemble_rhs(u=u_current)
 
         # COMPUTING RESIDUAL VECTOR
         R1 = C@v1 + 2*self.S11.dot(v1) + self.S22.dot(v1) + self.S12.dot(v2) - self.Q1.dot(p)
@@ -567,7 +578,7 @@ class NavierStokesSolver():
         else:
             raise ValueError("Unrecognized 'line_search' algorithim")
         
-        reduce_dim, fixed_dict, fixed_idx, free_idx = self.__apply_dirichlet(t_eval)
+        reduce_dim, fixed_dict, fixed_idx, free_idx = self._apply_dirichlet(t_eval)
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
             u_prev[dof] = pres
@@ -884,7 +895,16 @@ class NavierStokesSolver():
         H1_seminorm = 0
         r = 4
 
-        for con in self.connectivity:    
+        
+        for con in self.__velocity_connectivity:
+            # plt.figure()
+            # self.plot_mesh()
+            # for i,e in enumerate(con):
+            #     plt.text(*self.__nodes[e,:].T, "{} ({})".format(i,e))
+            # plt.plot(*self.__nodes[con[:4],:].T, 'sr')
+            # plt.plot(*self.__nodes[con[4:-1],:].T, 'ob')
+            # plt.plot(*self.__nodes[con[-1],:].T, '^g')
+            # plt.show()
             # Gauss-Legendre Quadrature
             for (xi, eta), wi in zip(*self.velocity_element.quadrature_points(r)):
                 psi_hat         = self.velocity_element.basis_functions(xi, eta)
@@ -905,26 +925,24 @@ class NavierStokesSolver():
                 # H1 seminorm
                 gradv = [vx[con], vy[con]]@grad_psi
                 H1_seminorm += np.linalg.norm(gradv - gradv_analytical(*coord), ord = 'fro')**2*detJ*wi
-        
+
         for con in self.__pressure_connectivity:
             # Gauss-Legendre Quadrature
             for (xi, eta), wi in zip(*self.pressure_element.quadrature_points(r)):
                 psi_hat      = self.pressure_element.basis_functions(xi, eta)
-                jac          = self.pressure_element.jacobian(self.p1_nodes[con], xi, eta)
+                jac          = self.pressure_element.jacobian(self.p1_nodes[con,:], xi, eta)
                 detJ = np.linalg.det(jac)
                 
                 # L2 terms
-                coord = psi_hat @ self.p1_nodes[con] # Physical coordinate sof quadrature point
+                coord = psi_hat @ self.p1_nodes[con,:] # Physical coordinate sof quadrature point
                 pq = np.dot(psi_hat, p[con])
                 L2_pressure_norm += (pq - p_analytical(*coord))**2*detJ*wi
 
         self.L2_velocity_norm = np.sqrt(L2_velocity_norm)
-        self.H1_seminorm = np.sqrt(H1_seminorm)
-        self.H1_norm = np.sqrt(L2_velocity_norm + H1_seminorm)
+        self.H1_seminorm      = np.sqrt(H1_seminorm)
+        self.H1_norm          = np.sqrt(L2_velocity_norm + H1_seminorm)
         self.L2_pressure_norm = np.sqrt(L2_pressure_norm)
-        return self.H1_norm, self.L2_velocity_norm, self.L2_pressure_norm
-
-
+        return self.L2_velocity_norm, self.H1_seminorm, self.H1_norm, self.L2_pressure_norm
 
 
 
@@ -949,11 +967,6 @@ class NavierStokesSolver():
     def Ne(self):
         """Number of elements"""
         return self.__Nele
-        
-    @property
-    def u(self):
-        """solution of w"""
-        return self.__u
     
     @property
     def p2_nodes(self):
@@ -989,23 +1002,6 @@ class NavierStokesSolver():
             return [int(2*self.__N_vel_nodes + _) for _ in node_idx]
         else:
             return int(2 * self.__N_vel_nodes + node_idx)
-
-
-
-    @property
-    def t(self):
-        """time array"""
-        return self.__t
-    
-    @property
-    def dt(self):
-        """time step"""
-        return self.__dt
-
-    @property
-    def nt(self):
-        """Number of time steps"""
-        return self.__nt
 
 
 def _process_solver_parameter_dict(func, options:dict):

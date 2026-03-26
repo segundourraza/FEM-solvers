@@ -11,75 +11,6 @@ plt.rcParams.update({'font.size': 13, 'font.family': 'serif',
                      'mathtext.fontset': 'cm'})
 
 
-def execute_kovazney(nx):
-    x_domain = [-0.5, 1.0]
-    y_domain = [-0.5, 1.5]
-
-    origin = (x_domain[0], y_domain[0])
-
-    a = x_domain[1] - x_domain[0]
-    b = y_domain[1] - y_domain[0]
-
-
-    order  = 2             # Q9 elements
-
-    # ── Physics ───────────────────────────────────────────────────────────────────
-    Re = rho = 10.0
-    mu = 1.0
-
-
-    pref = 10
-    corner_id = 0
-
-        
-    lam = Re/2 - np.sqrt((Re/2)**2 + 4*np.pi**2)
-    def vx_analytical(x, y):
-        return 1 - np.exp(lam*x)*np.cos(2*np.pi*y)
-
-    def vy_analytical(x, y):
-        return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
-
-    def gradv_analytical(x, y):
-        return np.array([[-lam*np.exp(lam*x)*np.cos(2*np.pi*y),                 2*np.pi*np.exp(lam*x)*np.sin(2*np.pi*y)],
-                         [lam**2/(2*np.pi)*np.exp(lam*x)*np.sin(2*np.pi*y) ,    lam*np.exp(lam*x)*np.cos(2*np.pi*y)]])
-
-
-    def p_analytical(x, y):
-        return 0.5*(pref - np.exp(2.0 * lam * x))*rho
-
-
-
-    ny = nx
-
-    # ── Boundary conditions ───────────────────────────────────────────────────────
-    top = BoundaryCondition(
-        name="dirichlet",
-        boundary_key="top",
-        type=BCType.DIRICHLET,
-        variable=BCVar.VELOCITY,
-        value= lambda x, y, t: (vx_analytical(x, y), vy_analytical(x,y)),
-        apply_strong=True,
-        metadata={"note": "no-slip top wall"},
-    )
-
-
-    bottom = top.copy(); bottom.boundary_key = 'bottom'
-    right = top.copy(); right.boundary_key = 'right'
-    left = top.copy(); left.boundary_key = 'left'
-
-    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, origin=origin)
-    sol.setup_physics(rho, mu)
-    sol.setup_boundary_conditions([bottom, top, left, right],
-                                pref_corner_id=corner_id, pref_value=p_analytical(x_domain[0], y_domain[0]))
-    
-    sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=NONLINEAR_OPTIONS, 
-                        solver = SOLVER)
-    
-    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
-    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
-    sol.save(append=f"_kovazney_nx{nx}")
-
-
 def execute_couette(nx):
     # ── Domain ────────────────────────────────────────────────────────────────────
     a, b   = 6, 2          # width, height
@@ -155,8 +86,8 @@ def execute_couette(nx):
     sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=NONLINEAR_OPTIONS,
                         solver = SOLVER)
     
-    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
-    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+    L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_couette_nx{nx}")
 
 
@@ -237,37 +168,45 @@ def execute_poiseuille(nx):
     sol.solve_steadystate(u0=1, p0=p_in, nonlinear_solver_options=NONLINEAR_OPTIONS,
                         solver = SOLVER)
     
-    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
-    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+    L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_poiseuille_nx{nx}")
 
 def execute_divfree(nx):
-    a = b = 1.1 
+    a = b = np.pi
     
     order  = 2             # Q9 elements
 
     # ── Physics ───────────────────────────────────────────────────────────────────
-    Re = rho = 10.0
+    Re = rho = 1.0
     mu = 1.0
 
-
-    pref = 10
+    pref = 0
     corner_id = 0
 
-        
     def vx_analytical(x, y):
-        return np.sin(np.pi/a*x)*np.cos(np.pi/b*y)
+        return np.sin(x)*np.cos(y)
 
     def vy_analytical(x, y):
-        return -np.cos(np.pi/a*x)*np.sin(np.pi/b*y)
-    
+        return -np.cos(x)*np.sin(y)
+
     def gradv_analytical(x,y):
-        return np.array([[np.pi/a*np.cos(np.pi/a*x)*np.cos(np.pi/b*y),  -np.pi/b*np.sin(np.pi/a*x*np.sin(np.pi/b*y))],
-                         [np.sin(np.pi/a*x)*np.sin(np.pi/b*y),          -np.cos(np.pi/a*x)*np.cos(np.pi/b*y)]])
+        return np.array([[np.cos(x)*np.cos(y), -np.sin(x)*np.sin(y)],
+                            [np.sin(x)*np.sin(y), -np.cos(x)*np.cos(y)]])
 
     def p_analytical(x, y):
-        return np.sin(np.pi/a*x)*np.cos(np.pi/b*y)
-        
+        return 1/4*(np.cos(2*x) + np.cos(2*y))*rho
+
+
+    def f1(x, y):
+        return 2*mu*np.sin(x)*np.cos(y)
+
+    def f2(x, y):
+        return -2*mu*np.cos(x)*np.sin(y)
+
+    def forcing_function(x,y):
+        return np.array([f1(x,y), f2(x,y)])
+    
     ny = nx
 
     # ── Boundary conditions ───────────────────────────────────────────────────────
@@ -289,14 +228,83 @@ def execute_divfree(nx):
     sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions([bottom, top, left, right],
-                                pref_corner_id=corner_id, pref_value=p_analytical)
+                                pref_corner_id=corner_id, pref_value=p_analytical, 
+                                forcing_function=forcing_function)
     
     sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=NONLINEAR_OPTIONS, 
                         solver = SOLVER)
     
-    H1_norm, L2_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
-    print("H1 norm: {}, L2 norm: {}, L2 pressure norm: {}".format(H1_norm, L2_norm, L2_p_norm))
+    L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
     sol.save(append=f"_mms_nx{nx}")
+
+def execute_kovazney(nx):
+    x_domain = [-0.5, 1.0]
+    y_domain = [-0.5, 1.5]
+
+    origin = (x_domain[0], y_domain[0])
+
+    a = x_domain[1] - x_domain[0]
+    b = y_domain[1] - y_domain[0]
+
+
+    order  = 2             # Q9 elements
+
+    # ── Physics ───────────────────────────────────────────────────────────────────
+    Re = rho = 40.0
+    mu = 1.0
+
+
+    pref = 10
+    corner_id = 0
+
+        
+    lam = Re/2 - np.sqrt((Re/2)**2 + 4*np.pi**2)
+    def vx_analytical(x, y):
+        return 1 - np.exp(lam*x)*np.cos(2*np.pi*y)
+
+    def vy_analytical(x, y):
+        return (lam/(2*np.pi))*np.exp(lam*x)*np.sin(2*np.pi*y)
+
+    def gradv_analytical(x, y):
+        return np.array([[-lam*np.exp(lam*x)*np.cos(2*np.pi*y),                 2*np.pi*np.exp(lam*x)*np.sin(2*np.pi*y)],
+                         [lam**2/(2*np.pi)*np.exp(lam*x)*np.sin(2*np.pi*y) ,    lam*np.exp(lam*x)*np.cos(2*np.pi*y)]])
+
+
+    def p_analytical(x, y):
+        return 0.5*(pref - np.exp(2.0 * lam * x))*rho
+
+    ny = nx
+
+    # ── Boundary conditions ───────────────────────────────────────────────────────
+    top = BoundaryCondition(
+        name="dirichlet",
+        boundary_key="top",
+        type=BCType.DIRICHLET,
+        variable=BCVar.VELOCITY,
+        value= lambda x, y, t: (vx_analytical(x, y), vy_analytical(x,y)),
+        apply_strong=True,
+        metadata={"note": "no-slip top wall"},
+    )
+
+
+    bottom = top.copy(); bottom.boundary_key = 'bottom'
+    right = top.copy(); right.boundary_key = 'right'
+    left = top.copy(); left.boundary_key = 'left'
+
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, origin=origin)
+    sol.setup_physics(rho, mu)
+    sol.setup_boundary_conditions([bottom, top, left, right],
+                                pref_corner_id=corner_id, pref_value=p_analytical(x_domain[0], y_domain[0]))
+    
+    sol.solve_steadystate(u0=1, p0=pref, nonlinear_solver_options=NONLINEAR_OPTIONS, 
+                        solver = SOLVER)
+    
+    L2v_norm, H1sm, H1_norm, L2_p_norm = sol.error_analysis(vx_analytical, vy_analytical, gradv_analytical, p_analytical)
+    print("||u-uh||_L2: {}, |u-uh|_H1: {}, ||u-uh||_H1: {}, ||p-ph||_L2: {}".format(L2v_norm, H1sm, H1_norm, L2_p_norm))
+    sol.save(append=f"_kovazney_nx{nx}")
+
+
 
 
 
@@ -315,7 +323,6 @@ def load_solution_hdf5(filepath):
         for name, ds in sol_grp["scalars"].items():
             scalars[name] = ds[()]
     return arrays, scalars
-
 
 def fetch_files_by_solver(pattern: str, fp: Path) -> dict[str, list[Path]]:
     """
@@ -365,7 +372,7 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution', solver = None):
         for i,name in enumerate(file_list):
             arrays, scalars = load_solution_hdf5(fp / name)
 
-            h = (max(arrays['p2_nodes'][:,0]) - min(arrays['p2_nodes'][:,0]))/scalars['Ne']
+            h = (max(arrays['p2_nodes'][:,0]) - min(arrays['p2_nodes'][:,0]))/np.sqrt(scalars['Ne'])
             convergence_data[i] = h, scalars['L2_velocity_norm'], scalars['H1_norm'], scalars['L2_pressure_norm'], scalars['H1_seminorm']
         
         convergence_data = convergence_data[convergence_data[:, 0].argsort()]
@@ -383,58 +390,59 @@ def complexity_plot(prefix, fp = Path.cwd() / 'solution', solver = None):
         x_data, L2_velocity_norm, H1_norm, L2_pressure_norm, H1_seminorm = convergence_data.T
         
         l, = ax1.loglog(x_data, H1_norm, 
-                        # label = "$|\\boldsymbol{u} - \\boldsymbol{u}_h|_{H_1}$",
+                        label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{H_1}$",
                         marker = marker[0], linestyle = ls, markerfacecolor = 'none', color = 'C0')
         # m,c = np.polyfit(np.log(x_data), np.log(H1_norm), 1)
         # ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
         #             label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c)
         #             )
-
+        # ax1.plot(np.nan, np.nan, color = 'k', 
+        #         marker = marker[0], linestyle = ls, markerfacecolor = 'none', 
+        #         label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{H^1}$")
+    
 
         # l, = ax1.loglog(x_data, H1_seminorm, 
-        #                 # label = "$|\\boldsymbol{u} - \\boldsymbol{u}_h|_{H_1}$",
+        #                 label = "$|\\boldsymbol{u} - \\boldsymbol{u}_h|_{H_1}$",
         #                 marker = marker[0], linestyle = ls, markerfacecolor = 'none', color = 'C0')
-        # # m,c = np.polyfit(np.log(x_data), np.log(H1_seminorm), 1)
-        # # ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
-        # #             label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c)
-        # #             )
+        # m,c = np.polyfit(np.log(x_data), np.log(H1_seminorm), 1)
+        # ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
+        #             label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c)
+        #             )    
+        # ax1.plot(np.nan, np.nan, color = 'k', 
+        #             marker = marker[0], linestyle = ls, markerfacecolor = 'none', 
+        #         label = "$|\\boldsymbol{u} - \\boldsymbol{u}_h|_{H^1}$")
+        
         
         l, = ax1.loglog(x_data, L2_velocity_norm,
-                        # label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{L_2}$",
+                        label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{L_2}$",
                         marker = marker[1], linestyle = ls, markerfacecolor = 'none',color = 'C1')
         # m,c = np.polyfit(np.log(x_data), np.log(L2_velocity_norm), 1)
         # ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
         #             label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c)
         #             )
-        
+        # ax1.plot(np.nan, np.nan, color = 'k', 
+        #         marker = marker[1], linestyle = ls, markerfacecolor = 'none', 
+        #         label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{L^2}$")
+    
         l, = ax1.loglog(x_data, L2_pressure_norm,
-                        # label = "$||p - p_h||_{L_2}$",
+                        label = "$||p - p_h||_{L_2}$",
                         marker = marker[2], linestyle = ls, markerfacecolor = 'none',color = 'C2')
         # m,c = np.polyfit(np.log(x_data), np.log(L2_pressure_norm), 1)
         # ax1.plot(x_data, x_data**(m)*np.exp(c), '--', color = l.get_color(), 
         #             label = "$\\log(e) = {:.2f}\\log(ne) + {:.2f}$".format(m,c)
         #             )
+        # ax1.plot(np.nan, np.nan, color = 'k', 
+        #         marker = marker[2], linestyle = ls, markerfacecolor = 'none', 
+        #             label = "$||p - p_h||_{L^2}$")
+
         
 
 
         print('\n\n',key)
         print_convergence_table(convergence_data)
 
-    # ax1.plot(np.nan, np.nan, color = 'k', 
-    #             marker = marker[0], linestyle = ls, markerfacecolor = 'none', 
-    #         label = "$|\\boldsymbol{u} - \\boldsymbol{u}_h|_{H^1}$")
-    ax1.plot(np.nan, np.nan, color = 'k', 
-                marker = marker[0], linestyle = ls, markerfacecolor = 'none', 
-            label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{H^1}$")
     
-    ax1.plot(np.nan, np.nan, color = 'k', 
-                marker = marker[1], linestyle = ls, markerfacecolor = 'none', 
-                label = "$||\\boldsymbol{u} - \\boldsymbol{u}_h||_{L^2}$")
     
-    ax1.plot(np.nan, np.nan, color = 'k', 
-                marker = marker[2], linestyle = ls, markerfacecolor = 'none', 
-                    label = "$||p - p_h||_{L^2}$")
-
 
     ax1.grid(which='major', linestyle='-', linewidth=0.8)
     ax1.grid(which='minor', linestyle='-', linewidth=0.25)
@@ -458,7 +466,7 @@ def print_convergence_table(results):
           f"{'|u-uh|_H1':>12}  {'rate':>6}  "
           f"{'||u-uh||_H1':>12}  {'rate':>6}  "
           f"{'||p-ph||_L2':>12}  {'rate':>6}")
-    print("-" * 75)
+    print("-" * 100)
     for i, (h, eL2, eH1, epL2, eHs1) in enumerate(results):
         if i == 0:
             print(f"{h:>10.4e}  {eL2:>12.4e}  {'—':>6}  "
@@ -466,11 +474,11 @@ def print_convergence_table(results):
                   f"{eH1:>12.4e}  {'—':>6}  "
                   f"{epL2:>12.4e}  {'—':>6}")
         else:
-            h_prev, eL2_prev, eH1_prev, epL2_prev, eH1semi_prev = results[i-1]
-            rL2  = convergence_rate(eL2_prev,  eL2,  h_prev, h)
-            rH1  = convergence_rate(eH1_prev,  eH1,  h_prev, h)
-            rHs1 = convergence_rate(eH1semi_prev,  eHs1,  h_prev, h)
-            rpL2 = convergence_rate(epL2_prev, epL2, h_prev, h)
+            h_prev, eL2_prev, eH1_prev, epL2_prev, eH1s_prev = results[i-1]
+            rL2  = convergence_rate(eL2_prev,   eL2,   h_prev, h)
+            rH1  = convergence_rate(eH1_prev,   eH1,   h_prev, h)
+            rHs1 = convergence_rate(eH1s_prev,  eHs1,  h_prev, h)
+            rpL2 = convergence_rate(epL2_prev,  epL2,  h_prev, h)
             print(f"{h:>10.4e}  "
                   f"{eL2:>12.4e}  {rL2:>6.2f}  "
                   f"{eHs1:>12.4e}  {rHs1:>6.2f}  "
@@ -481,29 +489,28 @@ def print_convergence_table(results):
 
 if __name__ == '__main__':
     SOLVER = 0
-    NONLINEAR_OPTIONS = {'tol': 1e-8,
+    NONLINEAR_OPTIONS = {'tol': 1e3,
                          'verbose' : True}
     
-    # SOLVER = 2
-    # NONLINEAR_OPTIONS = {'tol_newton': 1e-10,
-    #                      'verbose' : True}
+    SOLVER = 2
+    NONLINEAR_OPTIONS = {'tol_newton': 1e-8,
+                         'verbose' : True}
     
-    # nx_list = [4, 8, 16, 20, 24, 30, 40]
-    nx_list = [4, 8, 16, 20, 24]
-    # nx_list = [4]
-    # nx_list = [30, 40]
+    nx_list = [6, 8, 16, 20, 24]
+    nx_list = [8, 16, 20, 24, 30]
+    nx_list = [40]
     for nx in nx_list:
-    #     # execute_couette(nx)
-    #     pattern = "NavierStokes_steady_state*_couette"
+        # execute_couette(nx)
+        # pattern = "NavierStokes_steady_state*_couette"
 
-    #     # execute_poiseuille(nx)
+        # execute_poiseuille(nx)
         # pattern = "NavierStokes_steady_state*_poiseuille"
         
-        execute_divfree(nx)
-        pattern = "NavierStokes_steady_state*_mms"
+        # execute_divfree(nx)
+        # pattern = "NavierStokes_steady_state*_mms"
     
-        # # execute_kovazney(nx)
-        # pattern = "NavierStokes_steady_state*_kovazney"
+        execute_kovazney(nx)
+        pattern = "NavierStokes_steady_state*_kovazney"
     
     
     complexity_plot(pattern)
