@@ -452,7 +452,6 @@ class NavierStokesSolver():
             if reduce_dim:
                 # Build reduced system
                 C = self._evaluate_C(u_prev)
-                C *= 0
 
                 A_full = A + block_diag([C, C, Z], format='csc')
                 A_ff = A_full[free_idx][:,free_idx].tocsc()   # use CSC for solve if needed
@@ -884,7 +883,7 @@ class NavierStokesSolver():
     def _get_components(self, u):
         return u[:self.vdof], u[self.vdof:-self.pdof], u[-self.pdof:]
 
-    def error_analysis(self, vx_analytical:Callable, vy_analytical:Callable, gradv_analytical:Callable, p_analytical:Callable):
+    def error_analysis(self, vx_analytical:Callable, vy_analytical:Callable, gradv_analytical:Callable, p_analytical:Callable):    
         vx, vy, p = self.get_solution()
 
         L2_pressure_norm = 0
@@ -894,25 +893,10 @@ class NavierStokesSolver():
 
         
         for con in self.__velocity_connectivity:
-            # plt.figure()
-            # self.plot_mesh()
-            # for i,e in enumerate(con):
-            #     plt.text(*self.__nodes[e,:].T, "{} ({})".format(i,e))
-            # plt.plot(*self.__nodes[con[:4],:].T, 'sr')
-            # plt.plot(*self.__nodes[con[4:-1],:].T, 'ob')
-            # plt.plot(*self.__nodes[con[-1],:].T, '^g')
-            # plt.show()
             # Gauss-Legendre Quadrature
             for (xi, eta), wi in zip(*self.velocity_element.quadrature_points(r)):
-                psi_hat         = self.velocity_element.basis_functions(xi, eta)
-                grad_psi_hat    = self.velocity_element.grad_basis_functions(xi, eta)
-                jac             = self.velocity_element.jacobian(self.__nodes[con], xi, eta)
-                detJ = np.linalg.det(jac)
-                invJ_T = np.array([[jac[1,1], -jac[1,0]],
-                                   [-jac[0,1], jac[0,0]]])*(1/detJ)
-                grad_psi = grad_psi_hat@invJ_T # Map grad of shape function back to physical coordinates
-                
-                coord = psi_hat @ self.__nodes[con,:] # Physical coordinate sof quadrature point
+                psi_hat,_, detJ, grad_psi = self.velocity_element.properties(self.__nodes[con], xi, eta)                
+                coord = psi_hat @ self.__nodes[con,:] # Physical coordinate sof quadrature point                
                 
                 # L2 terms
                 vx_q = np.dot(vx[con], psi_hat)
@@ -926,13 +910,11 @@ class NavierStokesSolver():
         for con in self.__pressure_connectivity:
             # Gauss-Legendre Quadrature
             for (xi, eta), wi in zip(*self.pressure_element.quadrature_points(r)):
-                psi_hat      = self.pressure_element.basis_functions(xi, eta)
-                jac          = self.pressure_element.jacobian(self.p1_nodes[con,:], xi, eta)
-                detJ = np.linalg.det(jac)
-                
+                phi_hat,_, detJ, _ = self.pressure_element.properties(self.p1_nodes[con], xi, eta)                
+
                 # L2 terms
-                coord = psi_hat @ self.p1_nodes[con,:] # Physical coordinate sof quadrature point
-                pq = np.dot(psi_hat, p[con])
+                coord = phi_hat @ self.p1_nodes[con,:] # Physical coordinate sof quadrature point
+                pq = np.dot(phi_hat, p[con])
                 L2_pressure_norm += (pq - p_analytical(*coord))**2*detJ*wi
 
         self.L2_velocity_norm = np.sqrt(L2_velocity_norm)

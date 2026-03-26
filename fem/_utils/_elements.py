@@ -249,7 +249,7 @@ class _LegendreElement2D(ABC):
     def compute_ele_properties(self,nodes):...
     
     def jacobian(self, nodes, xi,eta)->np.ndarray:
-        return nodes.T@self.grad_basis_functions(xi, eta)
+        return self.grad_basis_functions(xi, eta).T@nodes
     
     def detJ(self, nodes, xi, eta):
         return np.linalg.det(self.jacobian(nodes, xi, eta))

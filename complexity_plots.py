@@ -292,7 +292,7 @@ def execute_kovazney(nx, alpha):
     right = top.copy(); right.boundary_key = 'right'
     left = top.copy(); left.boundary_key = 'left'
 
-    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, origin=origin)
+    sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, origin=origin, alpha=alpha)
     sol.setup_physics(rho, mu)
     sol.setup_boundary_conditions([bottom, top, left, right],
                                 pref_corner_id=corner_id, pref_value=p_analytical(x_domain[0], y_domain[0]))
@@ -488,23 +488,22 @@ def print_convergence_table(results):
 
 
 if __name__ == '__main__':
-    alpha = 0.25
     
     SOLVER = 0
     NONLINEAR_OPTIONS = {'tol': 1e3,
                          'verbose' : True}
     
-    # SOLVER = 2
-    # NONLINEAR_OPTIONS = {'tol_newton': 1e-8,
-    #                      'verbose' : True}
+    SOLVER = 2
+    NONLINEAR_OPTIONS = {'tol_newton': 1e-8,
+                         'verbose' : True}
     
     nx_list = [6, 8, 16, 20, 24]
-    nx_list = [6, 8, 16]
-    # nx_list = [8, 16, 20, 24, 30]
-    # nx_list = [40]
+    # nx_list = [6, 8, 16]
+    nx_list = [8, 16, 20, 24, 30]
+    nx_list = [40]
     for nx in nx_list:
-        execute_couette(nx, alpha)
-        pattern = "NavierStokes_steady_state*_couette"
+        # execute_couette(nx, alpha = 0.5)
+        # pattern = "NavierStokes_steady_state*_couette"
 
         # execute_poiseuille(nx)
         # pattern = "NavierStokes_steady_state*_poiseuille"
@@ -512,8 +511,8 @@ if __name__ == '__main__':
         # execute_divfree(nx)
         # pattern = "NavierStokes_steady_state*_mms"
     
-        # execute_kovazney(nx, alpha)
-        # pattern = "NavierStokes_steady_state*_kovazney"
+        execute_kovazney(nx, alpha = 0.3)
+        pattern = "NavierStokes_steady_state*_kovazney"
     
     
     complexity_plot(pattern)

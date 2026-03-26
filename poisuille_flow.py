@@ -73,7 +73,7 @@ right = BoundaryCondition(
 )
 
 # ── Solve ─────────────────────────────────────────────────────────────────────
-sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order)
+sol = NavierStokesSolver.uniform_rectangular_domain_rect(nx, ny, a, b, order=order, alpha=0.5)
 sol.setup_physics(rho, mu)
 sol.setup_boundary_conditions([bottom, top, left, right])
 

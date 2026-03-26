@@ -14,7 +14,7 @@ from fem import NavierStokesSolver, BoundaryCondition, BCVar, BCType
 
 # ── Domain ────────────────────────────────────────────────────────────────────
 a, b   = 6, 2          # width, height
-nx = ny = 8            # elements per direction
+nx = ny = 3            # elements per direction
 order  = 2             # Q9 elements
 
 # ── Physics ───────────────────────────────────────────────────────────────────
@@ -61,7 +61,7 @@ inlet = BoundaryCondition(
 # ── Solve ─────────────────────────────────────────────────────────────────────
 sol = NavierStokesSolver.uniform_rectangular_domain_rect(
     nx, ny, a, b, order=order, 
-    # alpha=0.5,
+    alpha=0.5,
 )
 sol.setup_physics(rho, mu)
 sol.setup_boundary_conditions([bottom, outlet, top, inlet])
