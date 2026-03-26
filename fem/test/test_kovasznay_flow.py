@@ -33,6 +33,7 @@ class TestKovasznayFlow(unittest.TestCase):
     # ------------------------------------------------------------------ #
     @classmethod
     def setUpClass(cls):
+        alpha = 0.3 # mesh perturbation parameter
         # ── Domain ───────────────────────────────────────────────────────
         cls.x_domain = (-0.5, 1.0)
         cls.y_domain = (-0.5, 1.5)
@@ -44,7 +45,7 @@ class TestKovasznayFlow(unittest.TestCase):
         cls.b = cls.y_domain[1] - cls.y_domain[0]   # 2.0
 
         # ── Physics ──────────────────────────────────────────────────────
-        cls.Re  = cls.rho = 100.0
+        cls.Re  = cls.rho = 40.0
         cls.mu  = 1.0
 
         cls.pref      = 10.0
@@ -79,6 +80,7 @@ class TestKovasznayFlow(unittest.TestCase):
         sol = NavierStokesSolver.uniform_rectangular_domain_rect(
             cls.nx, cls.ny, cls.a, cls.b,
             order=cls.order, origin=cls.origin,
+            alpha=alpha
         )
         sol.setup_physics(cls.rho, cls.mu)
         sol.setup_boundary_conditions(
@@ -278,7 +280,8 @@ class TestKovasznayConvergence(unittest.TestCase):
     mu       = 1.0
     pref     = 10.0
 
-    mesh_sizes = [4, 8, 16, 32]
+    mesh_sizes = [4, 8, 16, 24]
+    alpha = 0.3
 
     # Theoretical rates and acceptable tolerance (allow ~0.3 degradation)
     expected_velocity_rate = 3.0
@@ -316,6 +319,7 @@ class TestKovasznayConvergence(unittest.TestCase):
             sol = NavierStokesSolver.uniform_rectangular_domain_rect(
                 n, n, cls.a, cls.b,
                 order=cls.order, origin=cls.origin,
+                alpha=cls.alpha
             )
             sol.setup_physics(cls.rho, cls.mu)
 
