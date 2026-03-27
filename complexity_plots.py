@@ -500,10 +500,10 @@ if __name__ == '__main__':
     nx_list = [6, 8, 16, 20, 24]
     # nx_list = [6, 8, 16]
     nx_list = [8, 16, 20, 24, 30]
-    nx_list = [40]
+    nx_list = [4]
     for nx in nx_list:
-        # execute_couette(nx, alpha = 0.5)
-        # pattern = "NavierStokes_steady_state*_couette"
+        execute_couette(nx, alpha = 0.5)
+        pattern = "NavierStokes_steady_state*_couette"
 
         # execute_poiseuille(nx)
         # pattern = "NavierStokes_steady_state*_poiseuille"
@@ -511,10 +511,10 @@ if __name__ == '__main__':
         # execute_divfree(nx)
         # pattern = "NavierStokes_steady_state*_mms"
     
-        execute_kovazney(nx, alpha = 0.3)
-        pattern = "NavierStokes_steady_state*_kovazney"
+        # execute_kovazney(nx, alpha = 0.3)
+        # pattern = "NavierStokes_steady_state*_kovazney"
     
     
-    complexity_plot(pattern)
+    # complexity_plot(pattern)
 
     plt.show()

@@ -1,16 +1,15 @@
-import h5py, warnings, inspect
-from enum import Enum, auto
+import h5py, warnings, inspect, json
 from copy import deepcopy
 from datetime import timezone, datetime
 from pathlib import Path
-from typing import Iterable, Tuple, Callable, List, Dict, Set, Union
+from typing import Iterable, Tuple, Callable, Dict, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.collections import LineCollection
+from matplotlib.animation import FuncAnimation, PillowWriter
+from matplotlib.tri import Triangulation, LinearTriInterpolator
  
-import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.sparse import bmat, csr_matrix, block_diag
 
@@ -19,8 +18,7 @@ from ._bcs import BoundaryCondition, BCVar, BCType, PressureReferenceNode
 from .._utils import LinearRectElement, QuadraticRectElement
 from .._utils import (generate_uniform_rect_mesh, boundary_edges_connectivity, generate_nonuniform_rect_mesh)
 from .._utils import _progress_range, tqdm, NonConstantJacobian
-from .._utils._mesh import EdgesDict, group_array, perturb_interior_nodes
-
+from .._utils._mesh import EdgesDict, perturb_interior_nodes, group_by_x, group_by_y
 
 class BoundaryConditionSingularityWarning(Warning):
     def __init__(self, *args):
@@ -64,7 +62,13 @@ class NavierStokesSolver():
         
         self.__edges: EdgesDict = boundary_edges
 
-
+        print(f"Mesh information:")
+        print(f"  Nodes:          {nodes.shape[0]}")
+        print(f"  Elements:       {connectivity.shape[0]}")
+        print(f"  Nodes/element:  {connectivity.shape[1]}")
+        for name, edge_list in boundary_edges.items():
+            print(f"  {name:16s}: {len(edge_list)} edges")
+        print('\n')
 
     def __build_pressure_mesh(self):
         corners = self.__velocity_connectivity[:, :4]                    # (n_elems, 4)
@@ -164,9 +168,9 @@ class NavierStokesSolver():
                                   forcing_function:Callable = None):
         self.__forcing_func = forcing_function
 
-        self.__bc_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
+        self.__boundary_condition_dict: Dict[str, BoundaryCondition] = {bc.boundary_key: deepcopy(bc) for bc in bc_list}
         require_pref = True
-        for bc in self.__bc_dict.values():
+        for bc in self.__boundary_condition_dict.values():
             if isinstance(bc, BoundaryCondition):
                 bc.attach_segments_from_edges(edges_dict=self.__edges)
             else:
@@ -181,7 +185,7 @@ class NavierStokesSolver():
             
 
         
-        self.corner_nodes = [self.__bc_dict[keys].segments[0][0][0] for keys in ['bottom', 'right', 'top', 'left']]
+        self.corner_nodes = [self.__boundary_condition_dict[keys].segments[0][0][0] for keys in ['bottom', 'right', 'top', 'left']]
 
         if require_pref and pref_node is None:
             if isinstance(pref_value, (float, int)):
@@ -330,7 +334,7 @@ class NavierStokesSolver():
         """
         fixed = {}
         seen_dofs = {}
-        for key,bc in self.__bc_dict.items():
+        for key,bc in self.__boundary_condition_dict.items():
             if not bc.active:
                 continue
             if bc.variable != BCVar.VELOCITY:
@@ -383,17 +387,6 @@ class NavierStokesSolver():
                         seen_dofs[self.vy_dof(node)] = key
 
         return fixed
-
-    def __assemble_rhs(self, u:np.ndarray, t:float = 0.0):
-        
-        F = self._assemble_F()
-        for bc in self.__bc_dict.values():
-            if bc.type == BCType.NEUMANN and bc.active:
-                for segment in bc.segments:
-                    self._evaluate_traction(F, segment[0], u, bc=bc, t=t)
-        return F
-    
-
         
     def _apply_dirichlet(self, t: float = 0.0):
 
@@ -414,6 +407,16 @@ class NavierStokesSolver():
             free_idx = np.nonzero(mask)[0].astype(int)
         
             return True, fixed_dict, fixed_idx, free_idx
+
+    def __assemble_rhs(self, u:np.ndarray, t:float = 0.0):
+        
+        F = self._assemble_F()
+        for bc in self.__boundary_condition_dict.values():
+            if bc.type == BCType.NEUMANN and bc.active:
+                for segment in bc.segments:
+                    self._evaluate_traction(F, segment[0], u, bc=bc, t=t)
+        return F
+    
 
     #####################################################################
     # PICARDS ITERATION NON-LINEAR SOLVER
@@ -441,8 +444,9 @@ class NavierStokesSolver():
 
         # enforce fixed DOFs exactly on previous solution
         for dof, pres in fixed_dict.items():
-            u_prev[dof] = pres    
-            
+            u_prev[dof] = pres
+         
+        # return u_prev
         for k in range(max_iter):
 
             # Add Neumann traction contributions into rhs here as needed
@@ -642,12 +646,6 @@ class NavierStokesSolver():
         else:
             # if we exit loop not converged:
             warnings.warn("Newton-Raphson failed to converge after max_iter")
-        
-            
-        # plt.scatter(free_idx, abs(R_f), marker ='.')
-        # plt.gca().set_yscale('log')
-        # plt.axvline(self.vdof, color = 'r')
-        # plt.axvline(2*self.vdof, color = 'r')
         return u_next
 
     def apply_backtracking(self, u_prev, u, du, res_norm, Residual, relaxation_parameter = 0.0, max_iters=10, c=1e-4, rho=0.5):
@@ -704,48 +702,44 @@ class NavierStokesSolver():
             ax.plot(*self.p2_nodes.T, '.', color = node_color, ms = node_size)
             ax.plot(*self.p1_nodes.T, 'o', markerfacecolor = 'none', color = node_color, ms = node_size*1.25)
         
-
-
-        if self.velocity_element.n == 9:
-            idx = [0, 4, 1, 5, 2, 6, 3, 7, 0]
-            for e, con in enumerate(self.__velocity_connectivity):                
-                temp = self.__nodes[con[idx]].T
-                ax.plot(*temp, '-', color = color, linewidth= linewidth)
-        else:
-            for e, con in enumerate(self.__velocity_connectivity):
-                temp = np.vstack([self.__nodes[con],self.__nodes[con[0]]]).T
-                ax.plot(*temp, '-', color = color, linewidth= linewidth)
-
-
-        for i,(k,bc) in enumerate(self.__bc_dict.items()):
-            line_nodes = []
-            for edge in bc.segments:
-                line_nodes.extend(edge[0])
-            lc = LineCollection([self.__nodes[line_nodes,:]], colors = plt.rcParams['axes.prop_cycle'].by_key()['color'][i])
-            lc.set_linewidth(2.5)
-            lc.set_zorder(1e9)
-            ax.add_collection(lc)
-
-        
-
-
-    def plot_solution(self, z, ax = None, cmap = 'jet', levels = 100, plot_mesh = False, **kwargs):
+        temp = {k:v.segments for k,v in self.__boundary_condition_dict.items()}
+        _plot_mesh(self.__nodes, self.connectivity, temp, ax=ax)
+    
+    def plot_contourf(self, field, ax=None, levels=50, cmap='jet', **kwargs):
         if ax is None:
-            ax = plt.gca()  
-            
-        vmin = kwargs.get('vmin', min(np.nanmin(z), -1.0))
-        vmax = kwargs.get('vmax', max(np.nanmax(z), 1.0))
-
-        levels = np.linspace(vmin, vmax, levels)
-        if self.__nv == 3:
-            tcf = ax.tricontourf(self.__tri, z, levels, cmap = cmap)
+            fig, ax = plt.subplots()
+        if len(field) == self.vdof:
+            _plot_contourf(self.p2_nodes, self.__velocity_connectivity, field,ax=ax, levels=levels, cmap=cmap, **kwargs)
+        elif len(field) == self.pdof:
+            _plot_contourf(self.p1_nodes, self.__pressure_connectivity, field, ax=ax, levels=levels, cmap=cmap, **kwargs)
         else:
-            tcf = ax.tricontourf(self.__nodes[:,0], self.__nodes[:,1], z, levels, cmap = cmap)
-        
-        if plot_mesh:
-            self.plot_mesh(ax=ax, **kwargs)
-        
-        return tcf, levels
+            raise ValueError
+    
+    
+    def plot_streamlines(self,x_seed=None, n_seeds=20,
+                        ngrid=(500, 200), ax=None, **kwargs):
+        """
+        Parameters
+        ----------
+        x_seed : x-location of the vertical seeding station
+        n_seeds : number of seed points along the station
+        ngrid : (nx, ny) interpolation grid resolution
+        """
+        if ax is None:
+            fig, ax = plt.subplots()
+        return _plot_streamlines(nodes=self.__nodes, connectivity=self.__velocity_connectivity, 
+                                 vx = self.solution[:self.vdof],vy = self.solution[self.vdof:-self.pdof],
+                                 x_seed=x_seed, x_n_seeds=n_seeds, ngrid=ngrid, ax=ax)
+
+    def plot_velocity_stations(self,
+                            x_stations=None, n_stations=8,
+                            n_sample=200, scale=None,
+                            ax=None):
+        if ax is None:
+            fig, ax = plt.subplots()
+        return _plot_velocity_stations(self.__nodes, self.__velocity_connectivity, self.solution[:self.vdof], 
+                                       x_stations, n_stations, n_sample, scale, ax)
+
 
     def animate_solution(self, vector = 'c', fps = 10, cmap = 'jet', levels = 100, prepend = None, directory = None, show_mesh = False):
 
@@ -806,18 +800,20 @@ class NavierStokesSolver():
         tqdm.write(f"File saved successfully: {filepath}\n")
         plt.close(fig)
             
-    def save(self, prepend = None, append=None, directory = None, append_time = False):
-        if prepend is None:
-            filename = self.simulation_name
-        else:
-            filename = prepend + "_" + self.simulation_name
+    def save(self, prepend = None, append=None, directory = None, append_time = False, filename = None):
+        
+        if filename is None:
+            if prepend is None:
+                filename = self.simulation_name
+            else:
+                filename = prepend + "_" + self.simulation_name
 
-        if append:
-            filename += str(append)
-            
-        if append_time:
-            filename += "_" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
-
+            if append:
+                filename += str(append)
+                
+            if append_time:
+                filename += "_" + datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%MZ")
+        
         # Ensure extension
         if not filename.endswith(".h5"):
             filename += ".h5"
@@ -847,8 +843,7 @@ class NavierStokesSolver():
                     compression_opts=4,
                     shuffle=True
             )
-
-
+            f.attrs["boundary_edges"] = json.dumps({k:v.segments for k,v in self.__boundary_condition_dict.items()})
             # -----------------
             # Save scalars
             # -----------------
@@ -871,11 +866,8 @@ class NavierStokesSolver():
     #####################################################################
     # HELPER FUNCTIONS
 
-    def group_by_x(self):
-        return {k:sorted(v,key=lambda p: self.__nodes[p,1]) for k,v in group_array(self.__nodes[:,0]).items()}
-    
-    def group_by_y(self):
-        return {k:sorted(v,key=lambda p: self.__nodes[p,0]) for k,v in group_array(self.__nodes[:,1]).items()}
+    def group_by_x(self): return group_by_x(self.__nodes)
+    def group_by_y(self): return group_by_y(self.__nodes)
     
     def get_solution(self):
         return self._get_components(self.solution)
@@ -957,7 +949,6 @@ class NavierStokesSolver():
         """Nodes"""
         return self.__nodes[list(self.vel_2_pres_mapping.keys()),:]
         
-        
     @property
     def connectivity(self):
         """connectivity"""
@@ -992,4 +983,206 @@ def _process_solver_parameter_dict(func, options:dict):
 
 
 
+def _plot_mesh(nodes, connectivity, boundary_edges=None, ax=None, show_boundaries = False):
+    """
+    Plot the mesh with optional colour-coded boundary edges.
 
+    Parameters
+    ----------
+    nodes : np.ndarray, shape (n_nodes, 2)
+    connectivity : np.ndarray, shape (n_elements, nodes_per_elem)
+    boundary_edges : dict of str -> list of ((n1,...), elem_id), optional
+    ax : matplotlib Axes, optional
+    show : bool
+        Call plt.show() at the end.
+    """
+    if ax is None:
+        ax = plt.gca()
+    # ── Interior mesh edges ───────────────────────────────────────────
+    segments = []
+    for elem in connectivity:
+        corners = elem[:4]
+        poly = nodes[corners]
+        segments.append(np.vstack([poly, poly[0]]))
+
+    ax.add_collection(LineCollection(segments, linewidths=0.3, colors='0.7', zorder=1))
+
+    # ── Boundary edges ────────────────────────────────────────────────
+    if boundary_edges is not None:
+        boundary_colours = {
+            "left":     "blue",
+            "right":    "red",
+            "bottom":   "green",
+            "top":      "green",
+            "cylinder": "orange",
+        }
+
+        for name, edge_list in boundary_edges.items():
+            colour = boundary_colours.get(name, "magenta")
+            segs = []
+            for edge_nodes, _ in edge_list:
+                # use first and last node (endpoints) for the line segment
+                # for Q2 edges (3 nodes) this skips the midpoint visually
+                pts = nodes[list(edge_nodes)]
+                # sort by arc-length along edge for correct drawing order
+                segs.append(pts)
+                # segs.append(pts[[0, -1]])
+            ax.add_collection(LineCollection(
+                segs, linewidths=1.5, colors=colour, label=name, zorder=2,
+            ))
+
+    # de-duplicate legend entries
+    if show_boundaries and boundary_edges is not None:
+        handles, labels = ax.get_legend_handles_labels()
+        seen = {}
+        unique_h, unique_l = [], []
+        for h, l in zip(handles, labels):
+            if l not in seen:
+                seen[l] = True
+                unique_h.append(h)
+                unique_l.append(l)
+        ax.legend(unique_h, unique_l, loc='upper right')
+
+    return ax
+
+
+def _plot_contourf(nodes, connectivity, field, ax=None, levels=50, cmap='jet', **kwargs):
+    
+    if ax is None:
+        plt.gca()
+    # Split each quad (first 4 corners) into 2 triangles
+    triangles = []
+    for elem in connectivity:
+        c = elem[:4]
+        triangles.append([c[0], c[1], c[2]])
+        triangles.append([c[0], c[2], c[3]])
+    
+    triang = Triangulation(nodes[:, 0], nodes[:, 1], triangles)
+
+    tcf = ax.tricontourf(triang, field, levels=levels, cmap=cmap, **kwargs)
+    plt.colorbar(tcf, ax=ax)
+    return ax
+
+def _plot_velocity_stations(nodes, connectivity, vx,
+                           x_stations=None, n_stations=8,
+                           n_sample=200, scale=None,
+                           ax=None, **kwargs):
+    """
+    Plot vx profiles at vertical cross-sections along the domain.
+
+    Parameters
+    ----------
+    nodes : np.ndarray, shape (n_nodes, 2)
+    connectivity : element connectivity
+    vx : np.ndarray, velocity component to plot (typically vx)
+    x_stations : array-like of x-locations, or None for uniform spacing
+    n_stations : int, number of stations if x_stations is None
+    n_sample : int, points per vertical profile
+    scale : float, horizontal scaling of profiles. None = auto.
+    """
+    if ax is None:
+        plt.gca()
+    # ── Triangulate for interpolation ─────────────────────────────────
+    triangles = []
+    for elem in connectivity:
+        c = elem[:4]
+        triangles.append([c[0], c[1], c[2]])
+        triangles.append([c[0], c[2], c[3]])
+    triang = Triangulation(nodes[:, 0], nodes[:, 1], triangles)
+    interp = LinearTriInterpolator(triang, vx)
+
+    x_min, x_max = nodes[:, 0].min(), nodes[:, 0].max()
+    y_min, y_max = nodes[:, 1].min(), nodes[:, 1].max()
+
+    if x_stations is None:
+        margin = 0.02 * (x_max - x_min)
+        x_stations = np.linspace(x_min + margin, x_max - margin, n_stations)
+
+    # Auto-scale: profile amplitude fits in the gap between stations
+    if scale is None:
+        dx = np.min(np.diff(np.sort(x_stations)))
+        vmax = max(abs(vx.max()), abs(vx.min()), 1e-12)
+        scale = 0.8 * dx / vmax
+
+    y_line = np.linspace(y_min, y_max, n_sample)
+
+    # ── Plot each station ─────────────────────────────────────────────
+    for xs in x_stations:
+        x_pts = np.full_like(y_line, xs)
+        vals = interp(x_pts, y_line)
+
+        # mask points outside the domain (e.g. inside cylinder)
+        mask = ~np.isfinite(vals)
+        vals = np.where(mask, np.nan, vals)
+
+        # profile sits at x = xs, displaced horizontally by scaled vx
+        ax.plot(xs + scale * vals, y_line, **kwargs)
+        ax.axvline(xs, color='0.7', linewidth=0.3, zorder=0)
+
+    ax.set_xlim(x_min, x_max)
+    ax.set_ylim(y_min, y_max)
+    
+    return ax
+
+
+def _plot_streamlines(nodes, connectivity, vx, vy,
+                     x_seed= None, x_n_seeds=20,
+                     y_seed= None, y_n_seeds=20,
+                     ngrid=(500, 200), ax=None, plot_seed = False, **kwargs):
+    """
+    Parameters
+    ----------
+    nodes : Q2 node array
+    connectivity : element connectivity
+    vx, vy : velocity at Q2 nodes
+    x_seed : x-location of the vertical seeding station
+    n_seeds : number of seed points along the station
+    ngrid : (nx, ny) interpolation grid resolution
+    """
+    if ax is None:
+        plt.gca()
+    defaults = dict(color='k', linewidth=0.6, arrowsize=0.8, density=10)
+    defaults.update(kwargs)
+    # ── Triangulate for interpolation ─────────────────────────────────
+    triangles = []
+    for elem in connectivity:
+        c = elem[:4]
+        triangles.append([c[0], c[1], c[2]])
+        triangles.append([c[0], c[2], c[3]])
+    triang = Triangulation(nodes[:, 0], nodes[:, 1], triangles)
+
+    # ── Interpolate onto regular grid ─────────────────────────────────
+    xi = np.linspace(nodes[:, 0].min(), nodes[:, 0].max(), ngrid[0])
+    yi = np.linspace(nodes[:, 1].min(), nodes[:, 1].max(), ngrid[1])
+    Xi, Yi = np.meshgrid(xi, yi)
+
+    interp_vx = LinearTriInterpolator(triang, vx)
+    interp_vy = LinearTriInterpolator(triang, vy)
+    Vx = interp_vx(Xi, Yi)
+    Vy = interp_vy(Xi, Yi)
+    
+    y_min, y_max = nodes[:,1].min(), nodes[:,1].max()
+    x_min, x_max = nodes[:,0].min(), nodes[:,0].max()
+    if x_seed is None and y_seed is None:
+        ax.streamplot(xi, yi, Vx, Vy, **defaults)
+    else:
+        # ── Seed points along vertical station ────────────────────────────
+        _y = np.linspace(y_min + 1e-6, y_max - 1e-6, x_n_seeds+2)[1:-1]
+        _x = np.full_like(_y, x_seed)
+        seed_points = np.column_stack([_x, _y])
+
+        ax.streamplot(xi, yi, Vx, Vy, start_points=seed_points, **defaults)
+        if plot_seed:
+            ax.plot(_x, _y, 'xr', ms=4, label=f'seed x={x_seed}')
+
+    if y_seed is not None:
+        # ── Seed points along vertical station ────────────────────────────
+        _x = np.linspace(x_min + 1e-6, x_max - 1e-6, y_n_seeds+2)[1:-1]
+        _y = np.full_like(_x, y_seed)
+        seed_points = np.column_stack([_x, _y])
+
+        ax.streamplot(xi, yi, Vx, Vy, start_points=seed_points, **defaults)
+        if plot_seed:
+            ax.plot(_x, _y, 'xr', ms=4, label=f'seed x={x_seed}')
+
+    return ax

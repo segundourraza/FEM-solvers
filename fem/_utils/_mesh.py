@@ -1,7 +1,5 @@
-import pygmsh
 import numpy as np
-from collections import defaultdict
-from typing import Dict, List, Tuple, Optional, Iterable
+from typing import Dict, List, Tuple
 
 #####################################################
 # AUXILIARY MESH GENERATION AND FUNCTIONS
@@ -149,8 +147,6 @@ def generate_uniform_rect_mesh(nx, ny,
         
     return nodes, np.array(conn, dtype=int)
         
-
-
 def generate_nonuniform_rect_mesh(nx: int,
                                   ny: int,
                                   width: float,
@@ -383,8 +379,6 @@ def perturb_interior_nodes(nodes, alpha, boundary_nodes):
         nodes[k, 0] += alpha * s
         nodes[k, 1] += alpha * s
 
-
-
 Segment = Tuple[int, int]
 SegmentWithElem = Tuple[Segment, int]
 EdgesDict = Dict[str, List[SegmentWithElem]]
@@ -474,6 +468,14 @@ def boundary_edges_connectivity(conn: np.ndarray, nx: int, ny: int,
             edges['left'].append(((n_tl, nmid, n_bl), elem_id))
 
     return edges
+
+
+def group_by_x(nodes):
+    return {k:sorted(v,key=lambda p: nodes[p,1]) for k,v in group_array(nodes[:,0]).items()}
+
+def group_by_y(nodes):
+    return {k:sorted(v,key=lambda p: nodes[p,0]) for k,v in group_array(nodes[:,1]).items()}
+    
 
 def group_array(arr:np.ndarray, tol = 1e-9):
     arr = np.asarray(arr)
